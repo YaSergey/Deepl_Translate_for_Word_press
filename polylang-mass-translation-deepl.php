@@ -2,8 +2,8 @@
 /**
  * Plugin Name: Polylang Mass Translation with DeepL
  * Description: Добавляет кнопку для массового создания переводов постов через Polylang с автоматическим переводом через DeepL API
- * Version: 5.0
- * Author: Hontar DE
+ * Version: 5.1
+ * Author: Sergey Yasnetsky
  */
 
 // Предотвращаем прямой доступ
