@@ -54,6 +54,7 @@ class PMT_Google_Translation_Provider implements PMT_Translation_Provider_Interf
             return new WP_Error('pmt_google_missing_data', __('Не хватает данных для запроса Google Translation.', 'polylang-mass-translation-deepl'));
         }
 
+        // Count characters with mbstring fallback to keep rate limiting safe without the extension.
         $char_count = $this->count_characters($items);
         if ($this->rate_limiter && !$this->rate_limiter->allow($char_count)) {
             return new WP_Error('pmt_rate_limited', __('Превышен лимит запросов к Google Translation. Попробуйте позже.', 'polylang-mass-translation-deepl'));

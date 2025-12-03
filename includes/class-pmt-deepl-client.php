@@ -35,6 +35,7 @@ class PMT_DeepL_Translation_Provider implements PMT_Translation_Provider_Interfa
             return new WP_Error('pmt_missing_data', __('Не хватает данных для запроса DeepL.', 'polylang-mass-translation-deepl'));
         }
 
+        // Count characters with mbstring fallback to avoid fatal errors on hosts without the extension.
         $char_count = $this->count_characters($text);
         if ($this->rate_limiter && !$this->rate_limiter->allow($char_count)) {
             return new WP_Error('pmt_rate_limited', __('Превышен лимит запросов к DeepL. Попробуйте позже.', 'polylang-mass-translation-deepl'));
