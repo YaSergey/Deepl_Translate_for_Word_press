@@ -98,7 +98,12 @@ class PMT_DeepL_Translation_Provider implements PMT_Translation_Provider_Interfa
         $length_fn = function_exists('mb_strlen') ? 'mb_strlen' : 'strlen';
 
         if (is_array($text)) {
-            return array_sum(array_map($length_fn, $text));
+            return array_sum(array_map(
+                function ($item) use ($length_fn) {
+                    return $length_fn((string) $item);
+                },
+                $text
+            ));
         }
 
         return $length_fn((string) $text);
