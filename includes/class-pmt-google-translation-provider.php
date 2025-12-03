@@ -54,8 +54,7 @@ class PMT_Google_Translation_Provider implements PMT_Translation_Provider_Interf
             return new WP_Error('pmt_google_missing_data', __('Не хватает данных для запроса Google Translation.', 'polylang-mass-translation-deepl'));
         }
 
-        $length_fn = function_exists('mb_strlen') ? 'mb_strlen' : 'strlen';
-        $char_count = array_sum(array_map($length_fn, $items));
+        $char_count = $this->count_characters($items);
         if ($this->rate_limiter && !$this->rate_limiter->allow($char_count)) {
             return new WP_Error('pmt_rate_limited', __('Превышен лимит запросов к Google Translation. Попробуйте позже.', 'polylang-mass-translation-deepl'));
         }
@@ -121,6 +120,23 @@ class PMT_Google_Translation_Provider implements PMT_Translation_Provider_Interf
         }
 
         return $texts;
+    }
+
+    /**
+     * Calculate character length for single string or array of strings with mbstring fallback.
+     *
+     * @param string|array $text
+     * @return int
+     */
+    private function count_characters($text)
+    {
+        $length_fn = function_exists('mb_strlen') ? 'mb_strlen' : 'strlen';
+
+        if (is_array($text)) {
+            return array_sum(array_map($length_fn, $text));
+        }
+
+        return $length_fn((string) $text);
     }
 
     private function normalize_language($language)

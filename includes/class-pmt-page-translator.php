@@ -164,6 +164,10 @@ class PMT_Page_Translator
         $texts = array_values($fields);
         if ($this->batcher) {
             $translated = $this->batcher->translate_batch($texts, $target_language, $source_language);
+            if (is_wp_error($translated)) {
+                $this->log_error($translated->get_error_message());
+                return $fields;
+            }
         } else {
             $translated = array();
             foreach ($texts as $index => $text) {
