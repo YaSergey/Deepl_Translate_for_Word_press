@@ -37,6 +37,7 @@ class PMT_DeepL_Translation_Provider implements PMT_Translation_Provider_Interfa
 
         // Count characters with mbstring fallback to avoid fatal errors on hosts without the extension.
         $char_count = $this->count_characters($text);
+        $char_count = is_array($text) ? array_sum(array_map('mb_strlen', $text)) : mb_strlen($text);
         if ($this->rate_limiter && !$this->rate_limiter->allow($char_count)) {
             return new WP_Error('pmt_rate_limited', __('Превышен лимит запросов к DeepL. Попробуйте позже.', 'polylang-mass-translation-deepl'));
         }
