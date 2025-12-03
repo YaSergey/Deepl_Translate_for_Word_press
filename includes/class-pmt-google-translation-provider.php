@@ -54,7 +54,8 @@ class PMT_Google_Translation_Provider implements PMT_Translation_Provider_Interf
             return new WP_Error('pmt_google_missing_data', __('Не хватает данных для запроса Google Translation.', 'polylang-mass-translation-deepl'));
         }
 
-        $char_count = array_sum(array_map('mb_strlen', $items));
+        // Count characters with mbstring fallback to keep rate limiting safe without the extension.
+        $char_count = $this->count_characters($items);
         if ($this->rate_limiter && !$this->rate_limiter->allow($char_count)) {
             return new WP_Error('pmt_rate_limited', __('Превышен лимит запросов к Google Translation. Попробуйте позже.', 'polylang-mass-translation-deepl'));
         }
@@ -122,6 +123,28 @@ class PMT_Google_Translation_Provider implements PMT_Translation_Provider_Interf
         return $texts;
     }
 
+    /**
+     * Calculate character length for single string or array of strings with mbstring fallback.
+     *
+     * @param string|array $text
+     * @return int
+     */
+    private function count_characters($text)
+    {
+        $length_fn = function_exists('mb_strlen') ? 'mb_strlen' : 'strlen';
+
+        if (is_array($text)) {
+            return array_sum(array_map(
+                function ($item) use ($length_fn) {
+                    return $length_fn((string) $item);
+                },
+                $text
+            ));
+        }
+
+        return $length_fn((string) $text);
+    }
+
     private function normalize_language($language)
     {
         return str_replace('_', '-', strtolower($language));
@@ -156,6 +179,10 @@ class PMT_Google_Translation_Provider implements PMT_Translation_Provider_Interf
         $jwt_header = rtrim(strtr(base64_encode(json_encode(array('alg' => 'RS256', 'typ' => 'JWT'))), '+/', '-_'), '=');
         $jwt_claim = rtrim(strtr(base64_encode(json_encode($claim)), '+/', '-_'), '=');
         $signature_input = $jwt_header . '.' . $jwt_claim;
+
+        if (!function_exists('openssl_sign')) {
+            return new WP_Error('pmt_google_sign', __('Расширение OpenSSL недоступно, подпись JWT невозможна.', 'polylang-mass-translation-deepl'));
+        }
 
         $signature = '';
         $success = openssl_sign($signature_input, $signature, $data['private_key'], 'sha256');

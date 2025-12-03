@@ -27,6 +27,10 @@ class PMT_Page_Translator
 
     public function translate_published_pages($target_language, $context = array())
     {
+        if (!$this->can_use_polylang()) {
+            return new WP_Error('pmt_missing_polylang', __('Polylang не активирован, перевод страниц недоступен.', 'polylang-mass-translation-deepl'));
+        }
+
         $pages = get_posts(array(
             'post_type' => 'page',
             'post_status' => 'publish',
@@ -44,6 +48,10 @@ class PMT_Page_Translator
 
     public function translate_recent_pages($target_language, $since_timestamp, $context = array())
     {
+        if (!$this->can_use_polylang()) {
+            return new WP_Error('pmt_missing_polylang', __('Polylang не активирован, перевод страниц недоступен.', 'polylang-mass-translation-deepl'));
+        }
+
         $pages = get_posts(array(
             'post_type' => 'page',
             'post_status' => 'publish',
@@ -67,6 +75,10 @@ class PMT_Page_Translator
 
     public function translate_single_page($page, $target_language, $context = array())
     {
+        if (!$this->can_use_polylang()) {
+            return new WP_Error('pmt_missing_polylang', __('Polylang не активирован, перевод страниц недоступен.', 'polylang-mass-translation-deepl'));
+        }
+
         $source_language = pll_get_post_language($page->ID);
 
         if (!$source_language) {
@@ -152,6 +164,10 @@ class PMT_Page_Translator
         $texts = array_values($fields);
         if ($this->batcher) {
             $translated = $this->batcher->translate_batch($texts, $target_language, $source_language);
+            if (is_wp_error($translated)) {
+                $this->log_error($translated->get_error_message());
+                return $fields;
+            }
         } else {
             $translated = array();
             foreach ($texts as $index => $text) {
@@ -201,5 +217,10 @@ class PMT_Page_Translator
     private function log_error($message)
     {
         call_user_func($this->logger, $message);
+    }
+
+    private function can_use_polylang()
+    {
+        return function_exists('pll_get_post_language') && function_exists('pll_get_post');
     }
 }
