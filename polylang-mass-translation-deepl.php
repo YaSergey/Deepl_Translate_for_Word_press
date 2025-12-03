@@ -1259,6 +1259,11 @@ class PolylangMassTranslation
      */
     private function copy_product_attributes($original_product_id, $translation_id, $use_deepl = false, $source_language = 'auto', $target_language = '')
     {
+        if (!$this->has_woocommerce()) {
+            $this->toLog('WooCommerce not active, skipping attribute copy');
+            return;
+        }
+
         $product_attributes = get_post_meta($original_product_id, '_product_attributes', true);
 
         if (!$product_attributes || !is_array($product_attributes)) {
@@ -1316,6 +1321,10 @@ class PolylangMassTranslation
 
     private function sync_global_attribute_terms($original_product_id, $translation_id, $taxonomy, $target_language, $use_deepl = false, $source_language = 'auto')
     {
+        if (!$this->has_woocommerce()) {
+            return;
+        }
+
         // Hole Original-Terme
         $original_terms = get_the_terms($original_product_id, $taxonomy);
 
@@ -1351,6 +1360,11 @@ class PolylangMassTranslation
      */
     private function copy_product_variations($original_product_id, $translation_id, $use_deepl = false, $source_language = 'auto', $target_language = '')
     {
+        if (!$this->has_woocommerce()) {
+            $this->toLog('WooCommerce not active, skipping variation copy');
+            return;
+        }
+
         // Получаем все вариации исходного продукта
         $variations = get_children(array(
             'post_parent' => $original_product_id,
@@ -1565,7 +1579,9 @@ class PolylangMassTranslation
         }
 
         // Wichtig: Cache leeren
-        wc_delete_product_transients($translated_parent);
+        if (function_exists('wc_delete_product_transients')) {
+            wc_delete_product_transients($translated_parent);
+        }
     }
 
     /**
@@ -1573,6 +1589,10 @@ class PolylangMassTranslation
      */
     private function get_or_create_translated_attribute($attribute_name, $target_language, $use_deepl = false, $source_language = 'auto')
     {
+        if (!$this->has_woocommerce()) {
+            return false;
+        }
+
         // Проверяем, существует ли уже перевод атрибута
         $translated_attribute = pll_get_term_by('slug', $attribute_name, 'pa_' . $attribute_name, $target_language);
 
@@ -1691,15 +1711,28 @@ class PolylangMassTranslation
 
     private function sync_variations_with_attributes($product_id)
     {
+        if (!$this->has_woocommerce()) {
+            return;
+        }
+
         // Force WooCommerce to resync variation attributes
         $product = wc_get_product($product_id);
         if ($product && $product->is_type('variable')) {
             // Lösche den Cache
-            wc_delete_product_transients($product_id);
+            if (function_exists('wc_delete_product_transients')) {
+                wc_delete_product_transients($product_id);
+            }
 
             // Synchronisiere Variationen
-            WC_Product_Variable::sync_attributes($product_id);
+            if (class_exists('WC_Product_Variable')) {
+                WC_Product_Variable::sync_attributes($product_id);
+            }
         }
+    }
+
+    private function has_woocommerce()
+    {
+        return function_exists('wc_get_product');
     }
     private function translate_with_deepl($text, $source_lang, $target_lang)
     {
@@ -1847,7 +1880,11 @@ class PolylangMassTranslation
     public function transliterate_to_slug($text, $language = '')
     {
         // Приводим к нижнему регистру
-        $text = mb_strtolower($text, 'UTF-8');
+        if (function_exists('mb_strtolower')) {
+            $text = mb_strtolower($text, 'UTF-8');
+        } else {
+            $text = strtolower($text);
+        }
 
         // Специальные символы для разных языков
         $transliteration_map = array(
