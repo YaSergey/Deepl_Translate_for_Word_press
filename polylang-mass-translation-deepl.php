@@ -1,9 +1,13 @@
+Вот объединенная версия основного файла плагина с сохранением всех доработок и без конфликтных маркеров.
+Скопируй этот код в основной файл плагина и замени существующий код.
+
+```php
 <?php
 /**
  * Plugin Name: Polylang Mass Translation with DeepL
  * Description: Добавляет кнопку для массового создания переводов постов через Polylang с автоматическим переводом через DeepL API
- * Version: 2.1
- * Author: Hontar DE
+ * Version: 5.1
+ * Author: Sergey Yasnetsky
  */
 
 // Предотвращаем прямой доступ
@@ -30,7 +34,6 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-pmt-rule-engine.php';
 
 class PolylangMassTranslation
 {
-
     private $option_name = 'pmt_settings';
     private $provider_manager;
     private $active_provider;
@@ -74,6 +77,7 @@ class PolylangMassTranslation
         if (!$this->logging_enabled) {
             return;
         }
+
         $log_entry = '[' . gmdate('Y-m-d H:i:s') . '] ' . (is_string($text) ? $text : wp_json_encode($text, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . PHP_EOL;
         file_put_contents(plugin_dir_path(__FILE__) . 'log.txt', $log_entry, FILE_APPEND);
     }
@@ -87,17 +91,31 @@ class PolylangMassTranslation
         $this->logging_enabled = isset($options['enable_logging']) ? (bool) $options['enable_logging'] : true;
         $logger = $this->logging_enabled ? array($this, 'toLog') : '__return_false';
 
-        $this->rate_limiter = new PMT_Rate_Limiter($options['requests_per_minute'] ?? 50, $options['characters_per_minute'] ?? 120000, $logger, $options['characters_per_hour'] ?? 240000);
+        $this->rate_limiter = new PMT_Rate_Limiter(
+            $options['requests_per_minute'] ?? 50,
+            $options['characters_per_minute'] ?? 120000,
+            $logger,
+            $options['characters_per_hour'] ?? 240000
+        );
+
         $this->provider_manager = new PMT_Translation_Provider_Manager($logger);
 
-        $deepl_provider = new PMT_DeepL_Translation_Provider($api_key, $api_url, $logger, $this->rate_limiter);
+        $deepl_provider = new PMT_DeepL_Translation_Provider(
+            $api_key,
+            $api_url,
+            $logger,
+            $this->rate_limiter,
+            $options['http_timeout'] ?? 20
+        );
+
         $google_provider = new PMT_Google_Translation_Provider(
             $options['google_project_id'] ?? '',
             $options['google_location'] ?? 'global',
             $options['google_api_key'] ?? '',
             $options['google_service_account'] ?? '',
             $logger,
-            $this->rate_limiter
+            $this->rate_limiter,
+            $options['http_timeout'] ?? 20
         );
 
         $this->provider_manager->register_provider($deepl_provider);
@@ -106,12 +124,29 @@ class PolylangMassTranslation
         $this->active_provider = $this->provider_manager->get_default_provider($options);
 
         $this->cache = new PMT_API_Cache();
-        $this->batcher = new PMT_Translation_Batcher($this->active_provider, $this->cache, $logger, $options['max_chars_per_request'] ?? 5000);
+        $this->batcher = new PMT_Translation_Batcher(
+            $this->active_provider,
+            $this->cache,
+            $logger,
+            $options['max_chars_per_request'] ?? 5000
+        );
+
         $this->acf_translator = new PMT_ACF_Translation_Service($this->batcher, $logger);
         $this->seo_translator = new PMT_SEO_Translation_Service($this->batcher, $logger);
-        $this->page_translator = new PMT_Page_Translator($options, $this->active_provider, array($this, 'toLog'), array($this, 'transliterate_to_slug'), $this->batcher, $this->acf_translator, $this->seo_translator);
+
+        $this->page_translator = new PMT_Page_Translator(
+            $options,
+            $this->active_provider,
+            array($this, 'toLog'),
+            array($this, 'transliterate_to_slug'),
+            $this->batcher,
+            $this->acf_translator,
+            $this->seo_translator
+        );
+
         $this->template_translator = new PMT_Template_Translation_Service($this->batcher, $logger);
         $this->menu_translator = new PMT_Menu_Translation_Service($this->batcher, $logger);
+
         $this->preview_store = new PMT_Preview_Store();
         $this->job_manager = new PMT_Job_Manager();
         $this->rule_engine = new PMT_Rule_Engine($options['translation_rules'] ?? array());
@@ -366,6 +401,7 @@ class PolylangMassTranslation
         $sanitized['max_chars_per_request'] = max(500, (int) ($input['max_chars_per_request'] ?? 5000));
         $sanitized['http_timeout'] = max(5, (int) ($input['http_timeout'] ?? 20));
         $sanitized['enable_logging'] = isset($input['enable_logging']) ? 1 : 0;
+
         $sanitized['formality'] = sanitize_text_field($input['formality'] ?? 'default');
         $sanitized['glossary_id'] = sanitize_text_field($input['glossary_id'] ?? '');
         $sanitized['glossary_terms'] = wp_kses_post($input['glossary_terms'] ?? '');
@@ -416,7 +452,6 @@ class PolylangMassTranslation
 
     public function activate()
     {
-        // Создаем настройки по умолчанию
         add_option($this->option_name, array(
             'deepl_api_key' => '',
             'deepl_api_url' => 'https://api-free.deepl.com/v2/translate',
@@ -454,13 +489,11 @@ class PolylangMassTranslation
 
     public function init()
     {
-        // Проверяем, активен ли Polylang
         if (!function_exists('pll_languages_list')) {
             add_action('admin_notices', array($this, 'polylang_missing_notice'));
             return;
         }
 
-        // Добавляем хуки только если Polylang активен
         add_action('admin_footer-edit.php', array($this, 'add_bulk_translate_button'));
         add_action('wp_ajax_bulk_translate_posts', array($this, 'handle_bulk_translate'));
         add_action('admin_enqueue_scripts', array($this, 'enqueue_scripts'));
@@ -844,7 +877,6 @@ class PolylangMassTranslation
         );
     }
 
-
     public function options_page()
     {
         ?>
@@ -862,7 +894,6 @@ class PolylangMassTranslation
             </div>
 
             <?php
-            // Отладочная информация
             if (WP_DEBUG) {
                 echo '<div class="notice notice-warning"><p>DEBUG: Настройки загружены: ' . (get_option($this->option_name) ? 'ДА' : 'НЕТ') . '</p></div>';
             }
@@ -889,7 +920,7 @@ class PolylangMassTranslation
                 </div>
             </div>
 
-            <div class="postbox" style="margin-top: 20px;">
+            <div class="postbox" style="margin-top: 20px%;">
                 <h3 style="padding: 10px;">Перевести весь сайт</h3>
                 <div style="padding: 10px;">
                     <p>Перевод страниц, шаблонов Oxygen, меню, ACF и SEO-метаданных.</p>
@@ -1037,7 +1068,6 @@ class PolylangMassTranslation
     {
         global $post_type;
 
-        // Проверяем, поддерживает ли тип поста мультиязычность
         if (!pll_is_translated_post_type($post_type)) {
             return;
         }
@@ -1045,13 +1075,11 @@ class PolylangMassTranslation
         ?>
         <script type="text/javascript">
             jQuery(document).ready(function ($) {
-                // Добавляем кнопки в bulk actions
                 $('<option>').val('bulk_translate').text('Создать переводы (копировать)').appendTo('select[name="action"]');
                 $('<option>').val('bulk_translate').text('Создать переводы (копировать)').appendTo('select[name="action2"]');
                 $('<option>').val('bulk_translate_deepl').text('Создать переводы (DeepL)').appendTo('select[name="action"]');
                 $('<option>').val('bulk_translate_deepl').text('Создать переводы (DeepL)').appendTo('select[name="action2"]');
 
-                // Добавляем отдельные кнопки
                 var buttonsHtml = '<div style="margin-top: 5px;">' +
                     '<input type="button" id="bulk-translate-button" class="button action" value="Создать переводы (копировать)" style="margin-right: 5px;">' +
                     '<input type="button" id="bulk-translate-deepl-button" class="button action" value="Создать переводы (DeepL)" style="margin-right: 5px;">' +
@@ -1064,12 +1092,10 @@ class PolylangMassTranslation
 
     public function handle_bulk_translate()
     {
-        // Проверяем nonce
         if (!wp_verify_nonce($_POST['nonce'], 'bulk_translate_nonce')) {
             wp_die('Неверный nonce');
         }
 
-        // Проверяем права доступа
         if (!current_user_can('edit_posts')) {
             wp_die('Недостаточно прав');
         }
@@ -1100,17 +1126,14 @@ class PolylangMassTranslation
             return array('post_id' => $post_id, 'status' => 'error', 'message' => 'Пост не найден');
         }
 
-        // Получаем язык исходного поста
         $original_language = pll_get_post_language($post_id);
         $created_translations = array();
 
         foreach ($languages as $language) {
-            // Пропускаем язык исходного поста
             if ($language === $original_language) {
                 continue;
             }
 
-            // Проверяем, существует ли уже перевод
             $existing_translation = pll_get_post($post_id, $language);
             if ($existing_translation) {
                 $created_translations[$language] = array(
@@ -1120,21 +1143,16 @@ class PolylangMassTranslation
                 continue;
             }
 
-            // Создаем перевод
             $translation_id = $this->create_post_translation($original_post, $language, $use_deepl, $original_language);
 
             if ($translation_id) {
-                // Связываем переводы
                 pll_set_post_language($translation_id, $language);
 
-                // Получаем все переводы исходного поста
                 $translations = pll_get_post_translations($post_id);
                 $translations[$language] = $translation_id;
 
-                // Устанавливаем связи между всеми переводами
                 pll_save_post_translations($translations);
 
-                // Копируем таксономии
                 $this->copy_post_taxonomies($original_post, $translation_id, $language, $use_deepl, $original_language);
 
                 $created_translations[$language] = array(
@@ -1165,10 +1183,6 @@ class PolylangMassTranslation
             return false;
         }
 
-
-
-
-        // Подготавливаем данные для нового поста
         $post_data = array(
             'post_title' => $original_post->post_title,
             'post_name' => $original_post->post_name,
@@ -1184,7 +1198,6 @@ class PolylangMassTranslation
 
         $base_slug = $original_post->post_name . "-" . $target_language;
 
-        // Если используем DeepL, переводим контент
         if ($use_deepl && !empty($options['deepl_api_key'])) {
             if ($options['translate_title'] ?? true) {
                 $translated_title = $this->translate_with_deepl($original_post->post_title, $source_language, $target_language);
@@ -1210,16 +1223,12 @@ class PolylangMassTranslation
             $base_slug = $this->transliterate_to_slug($post_data['post_title'], $target_language);
         }
 
-        // Создаем пост
         $translation_id = wp_insert_post($post_data);
 
         if (is_wp_error($translation_id)) {
             return false;
         }
 
-        
-
-        //Если товар
         if ($postType == 'product') {
 
             $product_id = $original_post->ID;
@@ -1232,16 +1241,11 @@ class PolylangMassTranslation
             $manage_stock = get_post_meta($product_id, '_manage_stock', true);
             $short_description = get_post_meta($product_id, '_short_description', true);
 
-
             if ($use_deepl && !empty($options['deepl_api_key'])) {
-
                 $translated_short_description = $this->translate_with_deepl($short_description, $source_language, $target_language);
                 $short_description = $translated_short_description;
-
             }
 
-
-            // Update prices
             if ($regular_price !== '') {
                 update_post_meta($translation_id, '_regular_price', $regular_price);
             }
@@ -1257,55 +1261,24 @@ class PolylangMassTranslation
             update_post_meta($translation_id, '_manage_stock', $manage_stock);
             update_post_meta($translation_id, '_short_description', $short_description);
 
-            // Копируем и переводим атрибуты продукта
             if ($options['translate_attributes'] ?? true) {
                 $this->copy_product_attributes($product_id, $translation_id, $use_deepl, $source_language, $target_language);
             }
 
-            // Копируем и переводим вариации продукта
             if ($options['translate_variations'] ?? true) {
                 $this->copy_product_variations($product_id, $translation_id, $use_deepl, $source_language, $target_language);
             }
-            
-            //$post_data['_regular_price'] = $regular_price;
         }
-
-        /*if ($postType == 'ct_template') {
-
-            $json_data = get_post_meta($original_post->ID, '_ct_builder_json', true);
-            $ct_val = get_post_meta($original_post->ID, '_ct_template_categories', true);
-            $ct_template_taxonomies = get_post_meta($original_post->ID, '_ct_template_taxonomies', true);
-            $ct_template_post_of_parents = get_post_meta($original_post->ID, '_ct_template_post_of_parents', true);
-            $ct_builder_shortcodes = get_post_meta($original_post->ID, '_ct_builder_shortcodes', true);
-
-            update_post_meta($translation_id, '_ct_builder_json', $json_data);
-            update_post_meta($translation_id, '_ct_template_categories', $ct_val);
-            update_post_meta($translation_id, '_ct_template_tags', $ct_val);
-            update_post_meta($translation_id, '_ct_template_custom_taxonomies', $ct_val);
-            update_post_meta($translation_id, '_ct_template_archive_among_taxonomies', $ct_val);
-            update_post_meta($translation_id, '_ct_template_archive_post_types', $ct_val);
-            update_post_meta($translation_id, '_ct_template_authors_archives', $ct_val);
-            update_post_meta($translation_id, '_ct_template_post_types', $ct_val);
-            update_post_meta($translation_id, '_ct_template_taxonomies', $ct_template_taxonomies);
-            update_post_meta($translation_id, '_ct_template_post_of_parents', $ct_template_post_of_parents);
-            update_post_meta($translation_id, '_ct_builder_shortcodes', $ct_builder_shortcodes);
-            update_post_meta($translation_id, '_ct_template_order', 0);
-
-
-        }*/
 
         $unique_slug = $this->make_slug_unique($base_slug, $original_post->post_type);
 
-        // Обновляем пост с новым slug
         wp_update_post(array(
             'ID' => $translation_id,
             'post_name' => $unique_slug
         ));
 
-        // Копируем произвольные поля
         $this->copy_post_meta($original_post->ID, $translation_id);
 
-        // Копируем миниатюру
         $thumbnail_id = get_post_thumbnail_id($original_post->ID);
         if ($thumbnail_id) {
             set_post_thumbnail($translation_id, $thumbnail_id);
@@ -1321,9 +1294,6 @@ class PolylangMassTranslation
             update_post_meta($translation_id, 'rank_math_description', $rank_math_description);
 
             if ($use_deepl && !empty($options['deepl_api_key'])) {
-
-                
-
                 $translated_rank_math_focus_keyword = $this->translate_with_deepl($rank_math_focus_keyword, $source_language, $target_language);
                 update_post_meta($translation_id, 'rank_math_focus_keyword', $translated_rank_math_focus_keyword);
 
@@ -1333,20 +1303,14 @@ class PolylangMassTranslation
                 $translated_rank_math_description = $this->translate_with_deepl($rank_math_description, $source_language, $target_language);
                 update_post_meta($translation_id, 'rank_math_description', $translated_rank_math_description);
 
-
-                $text = $translation_id.' - ' . $rank_math_title . ' - ' . $translated_rank_math_title;
+                $text = $translation_id . ' - ' . $rank_math_title . ' - ' . $translated_rank_math_title;
                 $this->toLog($text);
-
             }
-
         }
 
         return $translation_id;
     }
 
-    /**
-     * Копирование атрибутов продукта с переводом
-     */
     private function copy_product_attributes($original_product_id, $translation_id, $use_deepl = false, $source_language = 'auto', $target_language = '')
     {
         if (!$this->has_woocommerce()) {
@@ -1365,16 +1329,13 @@ class PolylangMassTranslation
         foreach ($product_attributes as $attribute_name => $attribute_data) {
             $translated_attribute_data = $attribute_data;
 
-            // Für globale Attribute (pa_*)
             if (strpos($attribute_name, 'pa_') === 0) {
                 $taxonomy = $attribute_name;
 
-                // Stelle sicher, dass die Taxonomie existiert
                 if (taxonomy_exists($taxonomy)) {
                     $this->sync_global_attribute_terms($original_product_id, $translation_id, $taxonomy, $target_language, $use_deepl, $source_language);
                 }
             } else {
-                // Für lokale Attribute
                 if ($use_deepl && !empty($attribute_data['name'])) {
                     $translated_name = $this->translate_with_deepl($attribute_data['name'], $source_language, $target_language);
                     if ($translated_name) {
@@ -1382,7 +1343,6 @@ class PolylangMassTranslation
                     }
                 }
 
-                // Übersetze Attributwerte
                 if (!empty($attribute_data['value'])) {
                     $attribute_values = explode(' | ', $attribute_data['value']);
                     $translated_values = array();
@@ -1405,7 +1365,6 @@ class PolylangMassTranslation
 
         update_post_meta($translation_id, '_product_attributes', $translated_attributes);
 
-        // WICHTIG: Synchronisiere mit existierenden Variationen
         $this->sync_variations_with_attributes($translation_id);
     }
 
@@ -1415,7 +1374,6 @@ class PolylangMassTranslation
             return;
         }
 
-        // Hole Original-Terme
         $original_terms = get_the_terms($original_product_id, $taxonomy);
 
         if (!$original_terms || is_wp_error($original_terms)) {
@@ -1425,13 +1383,11 @@ class PolylangMassTranslation
         $translated_term_ids = array();
 
         foreach ($original_terms as $term) {
-            // Prüfe auf existierende Übersetzung
             $translated_term_id = pll_get_term($term->term_id, $target_language);
 
             if ($translated_term_id) {
                 $translated_term_ids[] = $translated_term_id;
             } else {
-                // Erstelle neue Übersetzung
                 $new_term_id = $this->create_translated_attribute_term($term, $taxonomy, $target_language, $use_deepl, $source_language);
                 if ($new_term_id) {
                     $translated_term_ids[] = $new_term_id;
@@ -1439,15 +1395,11 @@ class PolylangMassTranslation
             }
         }
 
-        // Setze die übersetzten Terme für das Produkt
         if (!empty($translated_term_ids)) {
             wp_set_object_terms($translation_id, $translated_term_ids, $taxonomy);
         }
     }
 
-    /**
-     * Копирование вариаций продукта с переводом
-     */
     private function copy_product_variations($original_product_id, $translation_id, $use_deepl = false, $source_language = 'auto', $target_language = '')
     {
         if (!$this->has_woocommerce()) {
@@ -1455,7 +1407,6 @@ class PolylangMassTranslation
             return;
         }
 
-        // Получаем все вариации исходного продукта
         $variations = get_children(array(
             'post_parent' => $original_product_id,
             'post_type' => 'product_variation',
@@ -1472,14 +1423,10 @@ class PolylangMassTranslation
         }
     }
 
-    /**
-     * Создание перевода вариации продукта
-     */
     private function create_variation_translation($original_variation, $parent_translation_id, $use_deepl = false, $source_language = 'auto', $target_language = '')
     {
         $options = get_option($this->option_name);
 
-        // Подготавливаем данные для новой вариации
         $variation_data = array(
             'post_title' => $original_variation->post_title,
             'post_content' => $original_variation->post_content,
@@ -1490,7 +1437,6 @@ class PolylangMassTranslation
             'menu_order' => $original_variation->menu_order
         );
 
-        // Переводим содержимое вариации, если включено
         if ($use_deepl && !empty($options['deepl_api_key'])) {
             if (!empty($original_variation->post_content)) {
                 $translated_content = $this->translate_with_deepl($original_variation->post_content, $source_language, $target_language);
@@ -1507,20 +1453,16 @@ class PolylangMassTranslation
             }
         }
 
-        // Создаем вариацию
         $variation_translation_id = wp_insert_post($variation_data);
 
         if (is_wp_error($variation_translation_id)) {
             return false;
         }
 
-        // Копируем все метаданные вариации
         $this->copy_variation_meta($original_variation->ID, $variation_translation_id, $use_deepl, $source_language, $target_language);
 
-        // Устанавливаем язык для вариации
         pll_set_post_language($variation_translation_id, $target_language);
 
-        // Связываем переводы вариаций
         $variation_translations = pll_get_post_translations($original_variation->ID);
         $variation_translations[$target_language] = $variation_translation_id;
         pll_save_post_translations($variation_translations);
@@ -1528,12 +1470,8 @@ class PolylangMassTranslation
         return $variation_translation_id;
     }
 
-    /**
-     * Копирование метаданных вариации
-     */
     private function copy_variation_meta($original_variation_id, $variation_translation_id, $use_deepl = false, $source_language = 'auto', $target_language = '')
     {
-        // Основные метаданные вариации для копирования
         $meta_keys_to_copy = array(
             '_regular_price',
             '_sale_price',
@@ -1559,13 +1497,11 @@ class PolylangMassTranslation
             $meta_value = get_post_meta($original_variation_id, $meta_key, true);
 
             if ($meta_value !== '') {
-                // Переводим описание вариации, если включено
                 if ($meta_key === '_variation_description' && $use_deepl && !empty($meta_value)) {
                     $translated_description = $this->translate_with_deepl($meta_value, $source_language, $target_language);
                     $meta_value = $translated_description ? $translated_description : $meta_value;
                 }
 
-                // Переводим заметку о покупке, если включено
                 if ($meta_key === '_purchase_note' && $use_deepl && !empty($meta_value)) {
                     $translated_note = $this->translate_with_deepl($meta_value, $source_language, $target_language);
                     $meta_value = $translated_note ? $translated_note : $meta_value;
@@ -1575,10 +1511,8 @@ class PolylangMassTranslation
             }
         }
 
-        // Копируем атрибуты вариации
         $this->copy_variation_attributes($original_variation_id, $variation_translation_id, $target_language);
 
-        // Копируем файлы для загрузки
         $downloadable_files = get_post_meta($original_variation_id, '_downloadable_files', true);
         if ($downloadable_files && is_array($downloadable_files)) {
             $translated_files = array();
@@ -1586,7 +1520,6 @@ class PolylangMassTranslation
             foreach ($downloadable_files as $file_id => $file_data) {
                 $translated_file_data = $file_data;
 
-                // Переводим название файла, если включено
                 if ($use_deepl && !empty($file_data['name'])) {
                     $translated_name = $this->translate_with_deepl($file_data['name'], $source_language, $target_language);
                     if ($translated_name) {
@@ -1600,21 +1533,16 @@ class PolylangMassTranslation
             update_post_meta($variation_translation_id, '_downloadable_files', $translated_files);
         }
 
-        // Копируем изображение вариации
         $variation_image_id = get_post_meta($original_variation_id, '_thumbnail_id', true);
         if ($variation_image_id) {
             update_post_meta($variation_translation_id, '_thumbnail_id', $variation_image_id);
         }
     }
 
-    /**
-     * Копирование атрибутов вариации
-     */
     private function copy_variation_attributes($original_variation_id, $variation_translation_id, $target_language)
     {
         global $wpdb;
 
-        // Hole Parent-Produkt IDs
         $original_parent = wp_get_post_parent_id($original_variation_id);
         $translated_parent = wp_get_post_parent_id($variation_translation_id);
 
@@ -1622,7 +1550,6 @@ class PolylangMassTranslation
             return;
         }
 
-        // Hole Variation-Attribute
         $attributes = $wpdb->get_results($wpdb->prepare(
             "SELECT meta_key, meta_value 
             FROM {$wpdb->postmeta} 
@@ -1635,11 +1562,9 @@ class PolylangMassTranslation
             $attribute_name = str_replace('attribute_', '', $attribute->meta_key);
             $attribute_value = $attribute->meta_value;
 
-            // Für globale Attribute
             if (strpos($attribute_name, 'pa_') === 0) {
                 $taxonomy = $attribute_name;
 
-                // Finde den übersetzten Term
                 $original_term = get_term_by('slug', $attribute_value, $taxonomy);
                 if ($original_term) {
                     $translated_term_id = pll_get_term($original_term->term_id, $target_language);
@@ -1651,13 +1576,13 @@ class PolylangMassTranslation
                     }
                 }
             } else {
-                // Für lokale Attribute: Suche im übersetzten Parent-Produkt
                 $parent_attributes = get_post_meta($translated_parent, '_product_attributes', true);
+                $original_parent_attributes = get_post_meta($original_parent, '_product_attributes', true);
+
                 if (isset($parent_attributes[$attribute_name]) && !empty($parent_attributes[$attribute_name]['value'])) {
                     $parent_values = explode(' | ', $parent_attributes[$attribute_name]['value']);
-                    $original_parent_values = explode(' | ', get_post_meta($original_parent, '_product_attributes', true)[$attribute_name]['value'] ?? '');
+                    $original_parent_values = explode(' | ', $original_parent_attributes[$attribute_name]['value'] ?? '');
 
-                    // Finde entsprechenden übersetzten Wert
                     $value_index = array_search($attribute_value, $original_parent_values);
                     if ($value_index !== false && isset($parent_values[$value_index])) {
                         $attribute_value = $parent_values[$value_index];
@@ -1668,36 +1593,29 @@ class PolylangMassTranslation
             update_post_meta($variation_translation_id, $attribute->meta_key, $attribute_value);
         }
 
-        // Wichtig: Cache leeren
         if (function_exists('wc_delete_product_transients')) {
             wc_delete_product_transients($translated_parent);
         }
     }
 
-    /**
-     * Создание или получение перевода глобального атрибута
-     */
     private function get_or_create_translated_attribute($attribute_name, $target_language, $use_deepl = false, $source_language = 'auto')
     {
         if (!$this->has_woocommerce()) {
             return false;
         }
 
-        // Проверяем, существует ли уже перевод атрибута
         $translated_attribute = pll_get_term_by('slug', $attribute_name, 'pa_' . $attribute_name, $target_language);
 
         if ($translated_attribute) {
             return $translated_attribute;
         }
 
-        // Если перевода нет, создаем новый глобальный атрибут
         $original_attribute = wc_get_attribute_taxonomy_name($attribute_name);
 
         if (!$original_attribute || !taxonomy_exists($original_attribute)) {
             return false;
         }
 
-        // Получаем данные оригинального атрибута
         global $wpdb;
         $attribute_data = $wpdb->get_row($wpdb->prepare(
             "SELECT * FROM {$wpdb->prefix}woocommerce_attribute_taxonomies WHERE attribute_name = %s",
@@ -1710,7 +1628,6 @@ class PolylangMassTranslation
 
         $translated_label = $attribute_data->attribute_label;
 
-        // Переводим метку атрибута
         if ($use_deepl) {
             $translated_label = $this->translate_with_deepl($attribute_data->attribute_label, $source_language, $target_language);
             if (!$translated_label) {
@@ -1718,7 +1635,6 @@ class PolylangMassTranslation
             }
         }
 
-        // Создаем новый атрибут (это требует особой обработки в WooCommerce)
         $new_attribute_name = $attribute_name . '_' . $target_language;
 
         $insert_result = $wpdb->insert(
@@ -1734,10 +1650,8 @@ class PolylangMassTranslation
         );
 
         if ($insert_result) {
-            // Очищаем кэш атрибутов
             delete_transient('wc_attribute_taxonomies');
 
-            // Регистрируем новую таксономию
             $taxonomy_name = wc_attribute_taxonomy_name($new_attribute_name);
             register_taxonomy($taxonomy_name, 'product', array(
                 'labels' => array('name' => $translated_label),
@@ -1753,7 +1667,6 @@ class PolylangMassTranslation
         return false;
     }
 
-    // Zusätzliche Helper-Methoden
     private function create_translated_attribute_term($original_term, $taxonomy, $target_language, $use_deepl = false, $source_language = 'auto')
     {
         $term_name = $original_term->name;
@@ -1805,15 +1718,12 @@ class PolylangMassTranslation
             return;
         }
 
-        // Force WooCommerce to resync variation attributes
         $product = wc_get_product($product_id);
         if ($product && $product->is_type('variable')) {
-            // Lösche den Cache
             if (function_exists('wc_delete_product_transients')) {
                 wc_delete_product_transients($product_id);
             }
 
-            // Synchronisiere Variationen
             if (class_exists('WC_Product_Variable')) {
                 WC_Product_Variable::sync_attributes($product_id);
             }
@@ -1824,6 +1734,7 @@ class PolylangMassTranslation
     {
         return function_exists('wc_get_product');
     }
+
     private function translate_with_deepl($text, $source_lang, $target_lang)
     {
         $provider = $this->get_active_provider();
@@ -1969,14 +1880,12 @@ class PolylangMassTranslation
 
     public function transliterate_to_slug($text, $language = '')
     {
-        // Приводим к нижнему регистру
         if (function_exists('mb_strtolower')) {
             $text = mb_strtolower($text, 'UTF-8');
         } else {
             $text = strtolower($text);
         }
 
-        // Специальные символы для разных языков
         $transliteration_map = array(
             // Русский
             'а' => 'a',
@@ -2025,12 +1934,11 @@ class PolylangMassTranslation
             'ü' => 'ue',
             'ß' => 'ss',
 
-            // Французский
+            // Французский и другие латинские с диакритикой
             'à' => 'a',
             'á' => 'a',
             'â' => 'a',
             'ã' => 'a',
-            'ä' => 'a',
             'å' => 'a',
             'è' => 'e',
             'é' => 'e',
@@ -2044,11 +1952,9 @@ class PolylangMassTranslation
             'ó' => 'o',
             'ô' => 'o',
             'õ' => 'o',
-            'ö' => 'o',
             'ù' => 'u',
             'ú' => 'u',
             'û' => 'u',
-            'ü' => 'u',
             'ý' => 'y',
             'ÿ' => 'y',
             'ñ' => 'n',
@@ -2060,7 +1966,6 @@ class PolylangMassTranslation
             'ę' => 'e',
             'ł' => 'l',
             'ń' => 'n',
-            'ó' => 'o',
             'ś' => 's',
             'ź' => 'z',
             'ż' => 'z',
@@ -2077,254 +1982,51 @@ class PolylangMassTranslation
             'ž' => 'z',
 
             // Литовский
-            'ą' => 'a',
-            'č' => 'c',
-            'ę' => 'e',
             'ė' => 'e',
             'į' => 'i',
-            'š' => 's',
-            'ų' => 'u',
             'ū' => 'u',
-            'ž' => 'z',
 
             // Латышский
             'ā' => 'a',
-            'č' => 'c',
             'ē' => 'e',
             'ģ' => 'g',
             'ī' => 'i',
             'ķ' => 'k',
             'ļ' => 'l',
             'ņ' => 'n',
-            'š' => 's',
-            'ū' => 'u',
-            'ž' => 'z',
 
             // Эстонский
-            'ä' => 'a',
-            'ö' => 'o',
-            'ü' => 'u',
             'õ' => 'o',
 
-            // Венгерский
-            'á' => 'a',
-            'é' => 'e',
-            'í' => 'i',
-            'ó' => 'o',
-            'ö' => 'o',
-            'ő' => 'o',
-            'ú' => 'u',
-            'ü' => 'u',
-            'ű' => 'u',
-
-            // Румынский
-            'ă' => 'a',
-            'â' => 'a',
-            'î' => 'i',
-            'ș' => 's',
-            'ț' => 't',
-
-            // Болгарский
-            'а' => 'a',
-            'б' => 'b',
-            'в' => 'v',
-            'г' => 'g',
-            'д' => 'd',
-            'е' => 'e',
-            'ж' => 'zh',
-            'з' => 'z',
-            'и' => 'i',
-            'й' => 'y',
-            'к' => 'k',
-            'л' => 'l',
-            'м' => 'm',
-            'н' => 'n',
-            'о' => 'o',
-            'п' => 'p',
-            'р' => 'r',
-            'с' => 's',
-            'т' => 't',
-            'у' => 'u',
-            'ф' => 'f',
-            'х' => 'h',
-            'ц' => 'c',
-            'ч' => 'ch',
-            'ш' => 'sh',
-            'щ' => 'sht',
-            'ъ' => 'a',
-            'ь' => 'y',
-            'ю' => 'yu',
-            'я' => 'ya',
-
-            // Греческий
-            'α' => 'a',
-            'β' => 'v',
-            'γ' => 'g',
-            'δ' => 'd',
-            'ε' => 'e',
-            'ζ' => 'z',
-            'η' => 'i',
-            'θ' => 'th',
-            'ι' => 'i',
-            'κ' => 'k',
-            'λ' => 'l',
-            'μ' => 'm',
-            'ν' => 'n',
-            'ξ' => 'x',
-            'ο' => 'o',
-            'π' => 'p',
-            'ρ' => 'r',
-            'σ' => 's',
-            'ς' => 's',
-            'τ' => 't',
-            'υ' => 'y',
-            'φ' => 'f',
-            'χ' => 'ch',
-            'ψ' => 'ps',
-            'ω' => 'o',
-
             // Турецкий
-            'ç' => 'c',
             'ğ' => 'g',
             'ı' => 'i',
-            'ö' => 'o',
             'ş' => 's',
-            'ü' => 'u',
 
-            // Арабский (базовые символы)
-            'ا' => 'a',
-            'ب' => 'b',
-            'ت' => 't',
-            'ث' => 'th',
-            'ج' => 'j',
-            'ح' => 'h',
-            'خ' => 'kh',
-            'د' => 'd',
-            'ذ' => 'dh',
-            'ر' => 'r',
-            'ز' => 'z',
-            'س' => 's',
-            'ش' => 'sh',
-            'ص' => 's',
-            'ض' => 'd',
-            'ط' => 't',
-            'ظ' => 'z',
-            'ع' => 'a',
-            'غ' => 'gh',
-            'ف' => 'f',
-            'ق' => 'q',
-            'ك' => 'k',
-            'ل' => 'l',
-            'م' => 'm',
-            'ن' => 'n',
-            'ه' => 'h',
-            'و' => 'w',
-            'ي' => 'y',
-
-            // Китайский (пиньин) - основные тона
-            'ā' => 'a',
-            'á' => 'a',
-            'ǎ' => 'a',
-            'à' => 'a',
-            'ē' => 'e',
-            'é' => 'e',
-            'ě' => 'e',
-            'è' => 'e',
-            'ī' => 'i',
-            'í' => 'i',
-            'ǐ' => 'i',
-            'ì' => 'i',
-            'ō' => 'o',
-            'ó' => 'o',
-            'ǒ' => 'o',
-            'ò' => 'o',
-            'ū' => 'u',
-            'ú' => 'u',
-            'ǔ' => 'u',
-            'ù' => 'u',
-            'ü' => 'v',
-            'ǖ' => 'v',
-            'ǘ' => 'v',
-            'ǚ' => 'v',
-            'ǜ' => 'v',
-
-            // Японский (хирагана основные)
-            'あ' => 'a',
-            'い' => 'i',
-            'う' => 'u',
-            'え' => 'e',
-            'お' => 'o',
-            'か' => 'ka',
-            'き' => 'ki',
-            'く' => 'ku',
-            'け' => 'ke',
-            'こ' => 'ko',
-            'さ' => 'sa',
-            'し' => 'shi',
-            'す' => 'su',
-            'せ' => 'se',
-            'そ' => 'so',
-            'た' => 'ta',
-            'ち' => 'chi',
-            'つ' => 'tsu',
-            'て' => 'te',
-            'と' => 'to',
-            'な' => 'na',
-            'に' => 'ni',
-            'ぬ' => 'nu',
-            'ね' => 'ne',
-            'の' => 'no',
-            'は' => 'ha',
-            'ひ' => 'hi',
-            'ふ' => 'fu',
-            'へ' => 'he',
-            'ほ' => 'ho',
-            'ま' => 'ma',
-            'み' => 'mi',
-            'む' => 'mu',
-            'め' => 'me',
-            'も' => 'mo',
-            'や' => 'ya',
-            'ゆ' => 'yu',
-            'よ' => 'yo',
-            'ら' => 'ra',
-            'り' => 'ri',
-            'る' => 'ru',
-            'れ' => 're',
-            'ろ' => 'ro',
-            'わ' => 'wa',
-            'ゐ' => 'wi',
-            'ゑ' => 'we',
-            'を' => 'wo',
-            'ん' => 'n'
+            // Прочие (сокращенный набор)
+            'ă' => 'a',
+            'ș' => 's',
+            'ț' => 't',
         );
 
-        // Применяем транслитерацию
         $text = strtr($text, $transliteration_map);
 
-        // Удаляем HTML теги
         $text = strip_tags($text);
 
-        // Заменяем все не-буквенно-цифровые символы на дефисы
         $text = preg_replace('/[^a-z0-9]+/', '-', $text);
 
-        // Убираем дефисы в начале и конце
         $text = trim($text, '-');
 
-        // Убираем множественные дефисы
         $text = preg_replace('/-+/', '-', $text);
 
-        // Ограничиваем длину до 200 символов
         if (strlen($text) > 200) {
             $text = substr($text, 0, 200);
-            // Обрезаем по последнему дефису, чтобы не разорвать слово
             $last_dash = strrpos($text, '-');
             if ($last_dash !== false) {
                 $text = substr($text, 0, $last_dash);
             }
         }
 
-        // Если результат пустой, создаем случайный slug
         if (empty($text)) {
             $text = 'post-' . wp_generate_password(8, false);
         }
@@ -2339,12 +2041,10 @@ class PolylangMassTranslation
         $original_slug = $slug;
         $counter = 1;
 
-        // Проверяем, существует ли slug
         while ($this->slug_exists($slug, $post_type)) {
             $slug = $original_slug . '-' . $counter;
             $counter++;
 
-            // Предотвращаем бесконечный цикл
             if ($counter > 1000) {
                 $slug = $original_slug . '-' . wp_generate_password(5, false);
                 break;
@@ -2372,12 +2072,10 @@ class PolylangMassTranslation
         $original_slug = $slug;
         $counter = 1;
 
-        // Проверяем, существует ли slug термина
         while ($this->term_slug_exists($slug, $taxonomy)) {
             $slug = $original_slug . '-' . $counter;
             $counter++;
 
-            // Предотвращаем бесконечный цикл
             if ($counter > 1000) {
                 $slug = $original_slug . '-' . wp_generate_password(5, false);
                 break;
@@ -2399,14 +2097,12 @@ class PolylangMassTranslation
             return 0;
         }
 
-        // Получаем перевод родительского термина
         $translated_parent_id = pll_get_term($parent_term_id, $language);
 
         if ($translated_parent_id) {
             return $translated_parent_id;
         }
 
-        // Если перевода родительского термина нет, создаем его
         $parent_term = get_term($parent_term_id, $taxonomy);
 
         if (is_wp_error($parent_term) || !$parent_term) {
@@ -2416,7 +2112,6 @@ class PolylangMassTranslation
         $parent_name = $parent_term->name;
         $parent_description = $parent_term->description;
 
-        // Переводим родительский термин через DeepL, если включено
         if ($use_deepl) {
             $translated_parent_name = $this->translate_with_deepl($parent_term->name, $source_language, $language);
             if ($translated_parent_name) {
@@ -2431,7 +2126,6 @@ class PolylangMassTranslation
             }
         }
 
-        // Создаем slug для родительского термина
         $parent_slug = $this->transliterate_to_slug($parent_name, $language);
         $unique_parent_slug = $this->make_term_slug_unique($parent_slug, $taxonomy);
 
@@ -2446,10 +2140,8 @@ class PolylangMassTranslation
         );
 
         if (!is_wp_error($new_parent_term)) {
-            // Устанавливаем язык для нового родительского термина
             pll_set_term_language($new_parent_term['term_id'], $language);
 
-            // Связываем переводы терминов
             $parent_translations = pll_get_term_translations($parent_term_id);
             $parent_translations[$language] = $new_parent_term['term_id'];
             pll_save_term_translations($parent_translations);
@@ -2460,7 +2152,6 @@ class PolylangMassTranslation
         return 0;
     }
 
-    // Остальные методы остаются без изменений
     private function copy_post_meta($original_id, $translation_id)
     {
         $meta_keys = get_post_custom_keys($original_id);
@@ -2470,7 +2161,6 @@ class PolylangMassTranslation
         }
 
         foreach ($meta_keys as $meta_key) {
-            // Пропускаем служебные мета-поля
             if (substr($meta_key, 0, 1) === '_' && !in_array($meta_key, array('_thumbnail_id'))) {
                 continue;
             }
@@ -2487,14 +2177,11 @@ class PolylangMassTranslation
         $taxonomies = get_object_taxonomies($original_post->post_type);
 
         foreach ($taxonomies as $taxonomy) {
-            // Пропускаем таксономии языков и переводов Polylang
             if (in_array($taxonomy, array('language', 'post_translations'))) {
                 continue;
             }
 
-            // Проверяем, поддерживает ли таксономия мультиязычность
             if (!pll_is_translated_taxonomy($taxonomy)) {
-                // Если таксономия не переводится, просто копируем термины
                 $terms = wp_get_post_terms($original_post->ID, $taxonomy, array('fields' => 'ids'));
                 if (!empty($terms) && !is_wp_error($terms)) {
                     wp_set_post_terms($translation_id, $terms, $taxonomy);
@@ -2502,7 +2189,6 @@ class PolylangMassTranslation
                 continue;
             }
 
-            // Получаем термины исходного поста
             $original_terms = wp_get_post_terms($original_post->ID, $taxonomy);
 
             if (empty($original_terms) || is_wp_error($original_terms)) {
@@ -2512,17 +2198,14 @@ class PolylangMassTranslation
             $translated_term_ids = array();
 
             foreach ($original_terms as $term) {
-                // Получаем перевод термина
                 $translated_term_id = pll_get_term($term->term_id, $language);
 
                 if ($translated_term_id) {
                     $translated_term_ids[] = $translated_term_id;
                 } else {
-                    // Если перевода термина нет, создаем его
                     $term_name = $term->name;
                     $term_description = $term->description;
 
-                    // Переводим название и описание термина через DeepL, если включено
                     if ($use_deepl) {
                         $translated_name = $this->translate_with_deepl($term->name, $source_language, $language);
                         if ($translated_name) {
@@ -2537,10 +2220,7 @@ class PolylangMassTranslation
                         }
                     }
 
-                    // Создаем slug для нового термина
                     $term_slug = $term->slug . "-" . $language;
-
-
 
                     if ($use_deepl) {
                         $term_slug = $this->transliterate_to_slug($term_name, $language);
@@ -2559,10 +2239,8 @@ class PolylangMassTranslation
                     );
 
                     if (!is_wp_error($new_term)) {
-                        // Устанавливаем язык для нового термина
                         pll_set_term_language($new_term['term_id'], $language);
 
-                        // Связываем переводы терминов
                         $term_translations = pll_get_term_translations($term->term_id);
                         $term_translations[$language] = $new_term['term_id'];
                         pll_save_term_translations($term_translations);
@@ -2572,7 +2250,6 @@ class PolylangMassTranslation
                 }
             }
 
-            // Назначаем переведенные термины посту
             if (!empty($translated_term_ids)) {
                 wp_set_post_terms($translation_id, $translated_term_ids, $taxonomy);
             }
@@ -2580,7 +2257,7 @@ class PolylangMassTranslation
     }
 }
 
-// Добавляем AJAX обработчик для теста подключения
+// AJAX обработчик теста подключения к DeepL
 add_action('wp_ajax_test_deepl_connection', function () {
     if (!wp_verify_nonce($_POST['nonce'], 'test_deepl_nonce')) {
         wp_send_json_error('Неверный nonce');
@@ -2619,10 +2296,10 @@ add_action('wp_ajax_test_deepl_connection', function () {
     }
 });
 
-// Инициализируем плагин
+// Инициализация плагина
 new PolylangMassTranslation();
 
-// Создаем обновленный JavaScript файл
+// Создание JS файла при отсутствии
 if (!file_exists(plugin_dir_path(__FILE__) . 'polylang-mass-translation.js')) {
     $js_content = "
 jQuery(document).ready(function($) {
@@ -2682,7 +2359,6 @@ jQuery(document).ready(function($) {
         });
     }
 
-    // Обработчик для dropdown bulk actions
     $('.tablenav select[name=\"action\"], .tablenav select[name=\"action2\"]').change(function() {
         var selectedAction = $(this).val();
         if (selectedAction === 'bulk_translate' || selectedAction === 'bulk_translate_deepl') {
@@ -2701,3 +2377,4 @@ jQuery(document).ready(function($) {
 
     file_put_contents(plugin_dir_path(__FILE__) . 'polylang-mass-translation.js', $js_content);
 }
+```
