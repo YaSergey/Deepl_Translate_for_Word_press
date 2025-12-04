@@ -1,4 +1,9 @@
+
+
 <?php
+
+//chatGpt version 1.1
+
 if (!defined('ABSPATH')) {
     exit;
 }
@@ -12,14 +17,20 @@ class PMT_Google_Translation_Provider implements PMT_Translation_Provider_Interf
     private $logger;
     private $rate_limiter;
 
-    public function __construct($project_id, $location, $api_key = '', $service_account_json = '', ?callable $logger = null, $rate_limiter = null)
-    {
-        $this->project_id = $project_id;
-        $this->location = $location ?: 'global';
-        $this->api_key = $api_key;
+    public function __construct(
+        $project_id,
+        $location,
+        $api_key = '',
+        $service_account_json = '',
+        ?callable $logger = null,
+        $rate_limiter = null
+    ) {
+        $this->project_id      = $project_id;
+        $this->location        = $location ?: 'global';
+        $this->api_key         = $api_key;
         $this->service_account = $service_account_json;
-        $this->logger = $logger;
-        $this->rate_limiter = $rate_limiter;
+        $this->logger          = $logger;
+        $this->rate_limiter    = $rate_limiter;
     }
 
     public function get_key()
@@ -35,6 +46,15 @@ class PMT_Google_Translation_Provider implements PMT_Translation_Provider_Interf
     public function translate_text($text, $target_language, $source_language = null, $options = array())
     {
         $items = is_array($text) ? $text : array($text);
+        $items = $this->normalize_text_items($items);
+
+        if (empty($items)) {
+            return new WP_Error(
+                'pmt_google_missing_data',
+                __('Не хватает данных для запроса Google Translation.', 'polylang-mass-translation-deepl')
+            );
+        }
+
         $result = $this->translate_batch($items, $target_language, $source_language, $options);
 
         if (is_wp_error($result)) {
@@ -50,34 +70,54 @@ class PMT_Google_Translation_Provider implements PMT_Translation_Provider_Interf
 
     public function translate_batch(array $items, $target_language, $source_language = null, $options = array())
     {
+        $items = $this->normalize_text_items($items);
+
         if (empty($items) || empty($target_language) || (!$this->api_key && !$this->service_account)) {
-            return new WP_Error('pmt_google_missing_data', __('Не хватает данных для запроса Google Translation.', 'polylang-mass-translation-deepl'));
+            return new WP_Error(
+                'pmt_google_missing_data',
+                __('Не хватает данных для запроса Google Translation.', 'polylang-mass-translation-deepl')
+            );
         }
 
-        // Count characters with mbstring fallback to keep rate limiting safe without the extension.
+        // Подсчёт символов через хелпер с fallback без mbstring.
         $char_count = $this->count_characters($items);
+
         if ($this->rate_limiter && !$this->rate_limiter->allow($char_count)) {
-            return new WP_Error('pmt_rate_limited', __('Превышен лимит запросов к Google Translation. Попробуйте позже.', 'polylang-mass-translation-deepl'));
+            return new WP_Error(
+                'pmt_rate_limited',
+                __('Превышен лимит запросов к Google Translation. Попробуйте позже.', 'polylang-mass-translation-deepl')
+            );
         }
 
         $body = array(
-            'contents' => array_values($items),
-            'targetLanguageCode' => $this->normalize_language($target_language),
-            'mimeType' => 'text/html',
+            'contents'            => array_values($items),
+            'targetLanguageCode'  => $this->normalize_language($target_language),
+            'mimeType'            => 'text/html',
         );
 
         if (!empty($source_language)) {
             $body['sourceLanguageCode'] = $this->normalize_language($source_language);
         }
 
-        $body = apply_filters('deepl_translation_provider_options', $body, 'google', $items, $target_language, $source_language);
+        $body = apply_filters(
+            'deepl_translation_provider_options',
+            $body,
+            'google',
+            $items,
+            $target_language,
+            $source_language
+        );
 
-        $url = sprintf('https://translation.googleapis.com/v3/projects/%s/locations/%s:translateText', rawurlencode($this->project_id), rawurlencode($this->location));
+        $url = sprintf(
+            'https://translation.googleapis.com/v3/projects/%s/locations/%s:translateText',
+            rawurlencode($this->project_id),
+            rawurlencode($this->location)
+        );
 
         $headers = array('Content-Type' => 'application/json');
-        $args = array(
+        $args    = array(
             'headers' => $headers,
-            'body' => wp_json_encode($body),
+            'body'    => wp_json_encode($body),
             'timeout' => 20,
         );
 
@@ -99,17 +139,24 @@ class PMT_Google_Translation_Provider implements PMT_Translation_Provider_Interf
             return $response;
         }
 
-        $status_code = wp_remote_retrieve_response_code($response);
+        $status_code   = wp_remote_retrieve_response_code($response);
         $response_body = wp_remote_retrieve_body($response);
 
         if ($status_code < 200 || $status_code >= 300) {
             $this->log('Google Translation API error: ' . $response_body);
-            return new WP_Error('google_api_error', sprintf(__('Ошибка Google Translation: %s', 'polylang-mass-translation-deepl'), $response_body));
+
+            return new WP_Error(
+                'google_api_error',
+                sprintf(
+                    __('Ошибка Google Translation: %s', 'polylang-mass-translation-deepl'),
+                    $response_body
+                )
+            );
         }
 
-        $data = json_decode($response_body, true);
+        $data         = json_decode($response_body, true);
         $translations = $data['translations'] ?? array();
-        $texts = array();
+        $texts        = array();
 
         foreach ($translations as $translation) {
             $texts[] = $translation['translatedText'] ?? '';
@@ -117,14 +164,18 @@ class PMT_Google_Translation_Provider implements PMT_Translation_Provider_Interf
 
         if (empty($texts)) {
             $this->log('Google Translation malformed response: ' . $response_body);
-            return new WP_Error('google_bad_response', __('Некорректный ответ Google Translation.', 'polylang-mass-translation-deepl'));
+
+            return new WP_Error(
+                'google_bad_response',
+                __('Некорректный ответ Google Translation.', 'polylang-mass-translation-deepl')
+            );
         }
 
         return $texts;
     }
 
     /**
-     * Calculate character length for single string or array of strings with mbstring fallback.
+     * Подсчёт длины строки или массива строк с fallback без mbstring.
      *
      * @param string|array $text
      * @return int
@@ -145,6 +196,23 @@ class PMT_Google_Translation_Provider implements PMT_Translation_Provider_Interf
         return $length_fn((string) $text);
     }
 
+    private function normalize_text_items(array $items)
+    {
+        $normalized = array();
+
+        foreach ($items as $item) {
+            $string_item = (string) $item;
+
+            if ($string_item === '') {
+                continue;
+            }
+
+            $normalized[] = $string_item;
+        }
+
+        return $normalized;
+    }
+
     private function normalize_language($language)
     {
         return str_replace('_', '-', strtolower($language));
@@ -157,45 +225,62 @@ class PMT_Google_Translation_Provider implements PMT_Translation_Provider_Interf
         }
 
         $cache_key = 'pmt_google_token_' . md5($this->service_account);
-        $cached = get_transient($cache_key);
+        $cached    = get_transient($cache_key);
+
         if ($cached) {
             return $cached;
         }
 
         $data = json_decode($this->service_account, true);
+
         if (empty($data['client_email']) || empty($data['private_key'])) {
-            return new WP_Error('pmt_google_credentials', __('Неверный формат JSON ключа службы Google.', 'polylang-mass-translation-deepl'));
+            return new WP_Error(
+                'pmt_google_credentials',
+                __('Неверный формат JSON ключа службы Google.', 'polylang-mass-translation-deepl')
+            );
         }
 
-        $now = time();
+        $now   = time();
         $claim = array(
-            'iss' => $data['client_email'],
+            'iss'   => $data['client_email'],
             'scope' => 'https://www.googleapis.com/auth/cloud-translation',
-            'aud' => 'https://oauth2.googleapis.com/token',
-            'iat' => $now,
-            'exp' => $now + 3600,
+            'aud'   => 'https://oauth2.googleapis.com/token',
+            'iat'   => $now,
+            'exp'   => $now + 3600,
         );
 
-        $jwt_header = rtrim(strtr(base64_encode(json_encode(array('alg' => 'RS256', 'typ' => 'JWT'))), '+/', '-_'), '=');
+        $jwt_header = rtrim(strtr(base64_encode(json_encode(array(
+            'alg' => 'RS256',
+            'typ' => 'JWT',
+        ))), '+/', '-_'), '=');
+
         $jwt_claim = rtrim(strtr(base64_encode(json_encode($claim)), '+/', '-_'), '=');
+
         $signature_input = $jwt_header . '.' . $jwt_claim;
 
         if (!function_exists('openssl_sign')) {
-            return new WP_Error('pmt_google_sign', __('Расширение OpenSSL недоступно, подпись JWT невозможна.', 'polylang-mass-translation-deepl'));
+            return new WP_Error(
+                'pmt_google_sign',
+                __('Расширение OpenSSL недоступно, подпись JWT невозможна.', 'polylang-mass-translation-deepl')
+            );
         }
 
         $signature = '';
-        $success = openssl_sign($signature_input, $signature, $data['private_key'], 'sha256');
+        $success   = openssl_sign($signature_input, $signature, $data['private_key'], 'sha256');
+
         if (!$success) {
-            return new WP_Error('pmt_google_sign', __('Не удалось подписать JWT для Google.', 'polylang-mass-translation-deepl'));
+            return new WP_Error(
+                'pmt_google_sign',
+                __('Не удалось подписать JWT для Google.', 'polylang-mass-translation-deepl')
+            );
         }
 
         $jwt = $signature_input . '.' . rtrim(strtr(base64_encode($signature), '+/', '-_'), '=');
 
         $response = wp_remote_post('https://oauth2.googleapis.com/token', array(
-            'body' => array(
+            'body'    => array(
                 'grant_type' => 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-                'assertion' => $jwt,
+                'assertion'  => $jwt,
             ),
             'timeout' => 15,
         ));
@@ -210,10 +295,15 @@ class PMT_Google_Translation_Provider implements PMT_Translation_Provider_Interf
 
         if ($code !== 200 || empty($body['access_token'])) {
             $this->log('Google token response error: ' . wp_remote_retrieve_body($response));
-            return new WP_Error('pmt_google_token_error', __('Не удалось получить токен доступа Google.', 'polylang-mass-translation-deepl'));
+
+            return new WP_Error(
+                'pmt_google_token_error',
+                __('Не удалось получить токен доступа Google.', 'polylang-mass-translation-deepl')
+            );
         }
 
         $token = $body['access_token'];
+
         set_transient($cache_key, $token, (int) $body['expires_in']);
 
         return $token;
