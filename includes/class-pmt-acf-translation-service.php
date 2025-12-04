@@ -13,7 +13,7 @@ class PMT_ACF_Translation_Service
     public function __construct(PMT_Translation_Batcher $batcher, ?callable $logger = null)
     {
         $this->batcher = $batcher;
-        $this->logger = $logger;
+
     }
 
     public function translate_fields($post_id, $target_language, $source_language, $context = array())
@@ -27,8 +27,7 @@ class PMT_ACF_Translation_Service
             return;
         }
 
-        $texts = array();
-        $field_map = array();
+
         $synced_keys = !empty($context['synced_meta']) ? (array) $context['synced_meta'] : array();
 
         foreach ($fields as $key => $field) {
@@ -39,6 +38,7 @@ class PMT_ACF_Translation_Service
             if (in_array($field['key'], $synced_keys, true)) {
                 continue;
             }
+
             $this->collect_field_texts($field, $texts);
             $field_map[] = $field['key'];
         }
