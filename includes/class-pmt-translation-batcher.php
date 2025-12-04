@@ -10,21 +10,11 @@ class PMT_Translation_Batcher
     private $logger;
     private $max_chars_per_request;
 
-    /**
-     * @param PMT_Translation_Provider_Interface $provider
-     * @param PMT_API_Cache                      $cache
-     * @param callable|null                      $logger
-     * @param int                                $max_chars_per_request максимальное число символов в одном запросе
-     */
-    public function __construct(
-        PMT_Translation_Provider_Interface $provider,
-        PMT_API_Cache $cache,
-        ?callable $logger = null,
-        $max_chars_per_request = 5000
-    ) {
-        $this->provider             = $provider;
-        $this->cache                = $cache;
-        $this->logger               = $logger;
+    public function __construct(PMT_Translation_Provider_Interface $provider, PMT_API_Cache $cache, ?callable $logger = null, $max_chars_per_request = 5000)
+    {
+        $this->provider = $provider;
+        $this->cache = $cache;
+        $this->logger = $logger;
         $this->max_chars_per_request = (int) $max_chars_per_request > 0 ? (int) $max_chars_per_request : 5000;
     }
 
@@ -43,108 +33,61 @@ class PMT_Translation_Batcher
 
         foreach ($strings as $index => $string) {
             $pre_filtered = apply_filters('deepl_pre_translate_text', $string, $source_language, $target_language);
-            $string       = is_string($pre_filtered) ? $pre_filtered : $string;
-
-            $cached = $this->cache->get(
-                $string,
-                $source_language,
-                $target_language,
-                $this->provider->get_key()
-            );
-
+            $string = is_string($pre_filtered) ? $pre_filtered : $string;
+            $cached = $this->cache->get($string, $source_language, $target_language, $this->provider->get_key());
             if (null !== $cached) {
                 $results[$index] = $cached;
                 continue;
             }
-
             $pending[$index] = $string;
         }
 
         if (!empty($pending)) {
-            // Бьём запрос на чанки по общему числу символов
-            $chunks            = $this->chunk_by_length(array_values($pending));
+            $chunks = $this->chunk_by_length(array_values($pending));
             $translated_values = array();
 
             foreach ($chunks as $chunk) {
-                $translation_result = $this->provider->translate_batch(
-                    $chunk,
-                    $target_language,
-                    $source_language,
-                    array_merge(
-                        array(
-                            'tag_handling'        => 'html',
-                            'preserve_formatting' => '1',
-                        ),
-                        $options
-                    )
-                );
+                $translation_result = $this->provider->translate_batch($chunk, $target_language, $source_language, array_merge(array(
+                    'tag_handling' => 'html',
+                    'preserve_formatting' => '1',
+                ), $options));
 
                 if (is_wp_error($translation_result)) {
                     $this->log('Batch translation error: ' . $translation_result->get_error_message());
                     continue;
                 }
 
-                $translated_values = array_merge(
-                    $translated_values,
-                    is_array($translation_result)
-                        ? array_values($translation_result)
-                        : array($translation_result)
-                );
+                $translated_values = array_merge($translated_values, is_array($translation_result) ? array_values($translation_result) : array($translation_result));
             }
 
             $position = 0;
-
             foreach ($pending as $index => $original) {
                 $translated_text = $translated_values[$position] ?? $original;
                 $position++;
-
-                $translated_text = apply_filters(
-                    'deepl_post_translate_text',
-                    $translated_text,
-                    $original,
-                    $source_language,
-                    $target_language
-                );
-
+                $translated_text = apply_filters('deepl_post_translate_text', $translated_text, $original, $source_language, $target_language);
                 $results[$index] = $translated_text;
-
-                $this->cache->set(
-                    $original,
-                    $source_language,
-                    $target_language,
-                    $translated_text,
-                    $this->provider->get_key()
-                );
+                $this->cache->set($original, $source_language, $target_language, $translated_text, $this->provider->get_key());
             }
         }
 
         ksort($results);
-
         return $results;
     }
 
-    /**
-     * Делит массив строк на чанки по суммарной длине (в символах).
-     *
-     * @param array $items
-     * @return array
-     */
     private function chunk_by_length(array $items)
     {
-        $chunks         = array();
-        $current        = array();
+        $chunks = array();
+        $current = array();
         $current_length = 0;
 
         foreach ($items as $item) {
             $length = is_string($item) ? strlen($item) : 0;
-
             if ($current_length + $length > $this->max_chars_per_request && !empty($current)) {
-                $chunks[]        = $current;
-                $current         = array();
-                $current_length  = 0;
+                $chunks[] = $current;
+                $current = array();
+                $current_length = 0;
             }
-
-            $current[]       = $item;
+            $current[] = $item;
             $current_length += $length;
         }
 

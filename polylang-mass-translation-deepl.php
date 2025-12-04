@@ -32,6 +32,9 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-pmt-preview-store.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-pmt-job-manager.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-pmt-rule-engine.php';
 
+/**
+ * Main plugin orchestrator for Polylang mass translation.
+ */
 class PolylangMassTranslation
 {
     private $option_name = 'pmt_settings';
@@ -65,6 +68,7 @@ class PolylangMassTranslation
         add_action('admin_post_pmt_rollback_translation', array($this, 'handle_rollback_translation'));
         add_action('admin_notices', array($this, 'maybe_render_api_key_notice'));
         add_action('plugins_loaded', array($this, 'bootstrap_services'));
+        add_action('plugins_loaded', array($this, 'maybe_generate_js_file'));
         add_action('pmt_translate_new_pages_event', array($this, 'translate_new_pages_from_cron'));
         add_action('init', array($this, 'register_rest_and_cli'));
         add_filter('pmt_deepl_style_args', array($this, 'apply_style_preferences'), 10, 4);
@@ -77,9 +81,13 @@ class PolylangMassTranslation
         if (!$this->logging_enabled) {
             return;
         }
-
         $log_entry = '[' . gmdate('Y-m-d H:i:s') . '] ' . (is_string($text) ? $text : wp_json_encode($text, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . PHP_EOL;
         file_put_contents(plugin_dir_path(__FILE__) . 'log.txt', $log_entry, FILE_APPEND);
+    }
+
+    private function is_allowed_post_type($post_type)
+    {
+        return in_array($post_type, array('post', 'page'), true);
     }
 
     public function bootstrap_services()
@@ -91,31 +99,17 @@ class PolylangMassTranslation
         $this->logging_enabled = isset($options['enable_logging']) ? (bool) $options['enable_logging'] : true;
         $logger = $this->logging_enabled ? array($this, 'toLog') : '__return_false';
 
-        $this->rate_limiter = new PMT_Rate_Limiter(
-            $options['requests_per_minute'] ?? 50,
-            $options['characters_per_minute'] ?? 120000,
-            $logger,
-            $options['characters_per_hour'] ?? 240000
-        );
-
+        $this->rate_limiter = new PMT_Rate_Limiter($options['requests_per_minute'] ?? 50, $options['characters_per_minute'] ?? 120000, $logger, $options['characters_per_hour'] ?? 240000);
         $this->provider_manager = new PMT_Translation_Provider_Manager($logger);
 
-        $deepl_provider = new PMT_DeepL_Translation_Provider(
-            $api_key,
-            $api_url,
-            $logger,
-            $this->rate_limiter,
-            $options['http_timeout'] ?? 20
-        );
-
+        $deepl_provider = new PMT_DeepL_Translation_Provider($api_key, $api_url, $logger, $this->rate_limiter);
         $google_provider = new PMT_Google_Translation_Provider(
             $options['google_project_id'] ?? '',
             $options['google_location'] ?? 'global',
             $options['google_api_key'] ?? '',
             $options['google_service_account'] ?? '',
             $logger,
-            $this->rate_limiter,
-            $options['http_timeout'] ?? 20
+            $this->rate_limiter
         );
 
         $this->provider_manager->register_provider($deepl_provider);
@@ -124,29 +118,12 @@ class PolylangMassTranslation
         $this->active_provider = $this->provider_manager->get_default_provider($options);
 
         $this->cache = new PMT_API_Cache();
-        $this->batcher = new PMT_Translation_Batcher(
-            $this->active_provider,
-            $this->cache,
-            $logger,
-            $options['max_chars_per_request'] ?? 5000
-        );
-
+        $this->batcher = new PMT_Translation_Batcher($this->active_provider, $this->cache, $logger, $options['max_chars_per_request'] ?? 5000);
         $this->acf_translator = new PMT_ACF_Translation_Service($this->batcher, $logger);
         $this->seo_translator = new PMT_SEO_Translation_Service($this->batcher, $logger);
-
-        $this->page_translator = new PMT_Page_Translator(
-            $options,
-            $this->active_provider,
-            array($this, 'toLog'),
-            array($this, 'transliterate_to_slug'),
-            $this->batcher,
-            $this->acf_translator,
-            $this->seo_translator
-        );
-
+        $this->page_translator = new PMT_Page_Translator($options, $this->active_provider, array($this, 'toLog'), array($this, 'transliterate_to_slug'), $this->batcher, $this->acf_translator, $this->seo_translator);
         $this->template_translator = new PMT_Template_Translation_Service($this->batcher, $logger);
         $this->menu_translator = new PMT_Menu_Translation_Service($this->batcher, $logger);
-
         $this->preview_store = new PMT_Preview_Store();
         $this->job_manager = new PMT_Job_Manager();
         $this->rule_engine = new PMT_Rule_Engine($options['translation_rules'] ?? array());
@@ -354,7 +331,7 @@ class PolylangMassTranslation
     {
         $options = get_option($this->option_name);
         $rules = $options['translation_rules'] ?? array();
-        echo '<p><label>Типы записей: <input type="text" name="' . $this->option_name . '[include_post_types]" value="' . esc_attr(implode(',', $rules['include_post_types'] ?? array('page'))) . '" /></label></p>';
+        echo '<p><label>Типы записей: <input type="text" name="' . $this->option_name . '[include_post_types]" value="' . esc_attr(implode(',', $rules['include_post_types'] ?? array('post', 'page'))) . '" /></label></p>';
         echo '<p><label>Исключить страницы (ID через запятую): <input type="text" name="' . $this->option_name . '[exclude_post_ids]" value="' . esc_attr(implode(',', $rules['exclude_post_ids'] ?? array())) . '" /></label></p>';
         echo '<p><label>Исключить шаблоны (ID): <input type="text" name="' . $this->option_name . '[exclude_template_ids]" value="' . esc_attr(implode(',', $rules['exclude_template_ids'] ?? array())) . '" /></label></p>';
         echo '<p><label>Пропустить ключи ACF: <input type="text" name="' . $this->option_name . '[exclude_acf_keys]" value="' . esc_attr(implode(',', $rules['exclude_acf_keys'] ?? array())) . '" /></label></p>';
@@ -401,7 +378,6 @@ class PolylangMassTranslation
         $sanitized['max_chars_per_request'] = max(500, (int) ($input['max_chars_per_request'] ?? 5000));
         $sanitized['http_timeout'] = max(5, (int) ($input['http_timeout'] ?? 20));
         $sanitized['enable_logging'] = isset($input['enable_logging']) ? 1 : 0;
-
         $sanitized['formality'] = sanitize_text_field($input['formality'] ?? 'default');
         $sanitized['glossary_id'] = sanitize_text_field($input['glossary_id'] ?? '');
         $sanitized['glossary_terms'] = wp_kses_post($input['glossary_terms'] ?? '');
@@ -412,8 +388,28 @@ class PolylangMassTranslation
         $sanitized['google_api_key'] = sanitize_text_field($input['google_api_key'] ?? '');
         $sanitized['google_service_account'] = wp_kses_post($input['google_service_account'] ?? '');
 
+        $allowed_post_types = array('post', 'page');
+        $input_post_types = array_filter(array_map('sanitize_text_field', explode(',', $input['include_post_types'] ?? '')));
+        $input_post_types = array_values(array_intersect($allowed_post_types, $input_post_types));
+
+        $checkbox_post_types = array();
+        if (!empty($sanitized['translate_posts'])) {
+            $checkbox_post_types[] = 'post';
+        }
+        if (!empty($sanitized['translate_pages'])) {
+            $checkbox_post_types[] = 'page';
+        }
+
+        if (!empty($checkbox_post_types)) {
+            $input_post_types = array_values(array_unique(array_intersect($allowed_post_types, $checkbox_post_types)));
+        }
+
+        if (empty($input_post_types)) {
+            $input_post_types = $allowed_post_types;
+        }
+
         $rules = array(
-            'include_post_types' => array_filter(array_map('sanitize_text_field', explode(',', $input['include_post_types'] ?? 'page'))),
+            'include_post_types' => $input_post_types,
             'exclude_post_ids' => array_filter(array_map('intval', explode(',', $input['exclude_post_ids'] ?? ''))),
             'exclude_template_ids' => array_filter(array_map('intval', explode(',', $input['exclude_template_ids'] ?? ''))),
             'exclude_acf_keys' => array_filter(array_map('sanitize_text_field', explode(',', $input['exclude_acf_keys'] ?? ''))),
@@ -458,6 +454,8 @@ class PolylangMassTranslation
             'translate_content' => true,
             'translate_title' => true,
             'translate_excerpt' => true,
+            'translate_posts' => 1,
+            'translate_pages' => 1,
             'post_status' => 'draft',
             'target_language' => '',
             'translate_whole_site' => 0,
@@ -467,7 +465,7 @@ class PolylangMassTranslation
             'glossary_id' => '',
             'glossary_terms' => '',
             'translation_rules' => array(
-                'include_post_types' => array('page'),
+                'include_post_types' => array('post', 'page'),
                 'exclude_post_ids' => array(),
                 'exclude_template_ids' => array(),
                 'exclude_acf_keys' => array(),
@@ -480,6 +478,9 @@ class PolylangMassTranslation
         }
 
         add_option('pmt_last_cron_run', time());
+
+        // Молча создаём вспомогательный JS-файл, чтобы избежать предупреждений при загрузке админки.
+        $this->maybe_generate_js_file();
     }
 
     public function deactivate()
@@ -877,6 +878,71 @@ class PolylangMassTranslation
         );
     }
 
+        add_settings_field(
+            'requests_per_minute',
+            'Лимит запросов в минуту',
+            array($this, 'requests_per_minute_render'),
+            $this->option_name,
+            $this->option_name . '_section'
+        );
+
+        add_settings_field(
+            'characters_per_minute',
+            'Лимит символов в минуту',
+            array($this, 'characters_per_minute_render'),
+            $this->option_name,
+            $this->option_name . '_section'
+        );
+
+        add_settings_field(
+            'characters_per_hour',
+            __('Лимит символов в час', 'polylang-mass-translation-deepl'),
+            array($this, 'characters_per_hour_render'),
+            $this->option_name,
+            $this->option_name . '_section'
+        );
+
+        add_settings_field(
+            'max_chars_per_request',
+            __('Макс. символов на запрос', 'polylang-mass-translation-deepl'),
+            array($this, 'max_chars_per_request_render'),
+            $this->option_name,
+            $this->option_name . '_section'
+        );
+
+        add_settings_field(
+            'http_timeout',
+            __('HTTP таймаут (сек)', 'polylang-mass-translation-deepl'),
+            array($this, 'http_timeout_render'),
+            $this->option_name,
+            $this->option_name . '_section'
+        );
+
+        add_settings_field(
+            'enable_logging',
+            __('Вести лог', 'polylang-mass-translation-deepl'),
+            array($this, 'enable_logging_render'),
+            $this->option_name,
+            $this->option_name . '_section'
+        );
+
+        add_settings_field(
+            'formality',
+            'Стиль и формальность',
+            array($this, 'formality_render'),
+            $this->option_name,
+            $this->option_name . '_section'
+        );
+
+        add_settings_field(
+            'translation_rules',
+            'Правила перевода',
+            array($this, 'translation_rules_render'),
+            $this->option_name,
+            $this->option_name . '_section'
+        );
+    }
+
     public function options_page()
     {
         ?>
@@ -920,7 +986,7 @@ class PolylangMassTranslation
                 </div>
             </div>
 
-            <div class="postbox" style="margin-top: 20px%;">
+            <div class="postbox" style="margin-top: 20px;">
                 <h3 style="padding: 10px;">Перевести весь сайт</h3>
                 <div style="padding: 10px;">
                     <p>Перевод страниц, шаблонов Oxygen, меню, ACF и SEO-метаданных.</p>
@@ -1126,6 +1192,11 @@ class PolylangMassTranslation
             return array('post_id' => $post_id, 'status' => 'error', 'message' => 'Пост не найден');
         }
 
+        if (!$this->is_allowed_post_type($original_post->post_type)) {
+            return array('post_id' => $post_id, 'status' => 'skipped', 'message' => 'Тип записи не поддерживается');
+        }
+
+        // Получаем язык исходного поста
         $original_language = pll_get_post_language($post_id);
         $created_translations = array();
 
@@ -1182,6 +1253,7 @@ class PolylangMassTranslation
         if (!in_array($postType, array('post', 'page'), true)) {
             return false;
         }
+
 
         $post_data = array(
             'post_title' => $original_post->post_title,
@@ -1374,6 +1446,7 @@ class PolylangMassTranslation
             return;
         }
 
+        // Hole Original-Terme
         $original_terms = get_the_terms($original_product_id, $taxonomy);
 
         if (!$original_terms || is_wp_error($original_terms)) {
@@ -1407,6 +1480,7 @@ class PolylangMassTranslation
             return;
         }
 
+        // Получаем все вариации исходного продукта
         $variations = get_children(array(
             'post_parent' => $original_product_id,
             'post_type' => 'product_variation',
@@ -1593,6 +1667,7 @@ class PolylangMassTranslation
             update_post_meta($variation_translation_id, $attribute->meta_key, $attribute_value);
         }
 
+        // Wichtig: Cache leeren
         if (function_exists('wc_delete_product_transients')) {
             wc_delete_product_transients($translated_parent);
         }
@@ -1604,6 +1679,7 @@ class PolylangMassTranslation
             return false;
         }
 
+        // Проверяем, существует ли уже перевод атрибута
         $translated_attribute = pll_get_term_by('slug', $attribute_name, 'pa_' . $attribute_name, $target_language);
 
         if ($translated_attribute) {
@@ -1718,12 +1794,15 @@ class PolylangMassTranslation
             return;
         }
 
+        // Force WooCommerce to resync variation attributes
         $product = wc_get_product($product_id);
         if ($product && $product->is_type('variable')) {
+            // Lösche den Cache
             if (function_exists('wc_delete_product_transients')) {
                 wc_delete_product_transients($product_id);
             }
 
+            // Synchronisiere Variationen
             if (class_exists('WC_Product_Variable')) {
                 WC_Product_Variable::sync_attributes($product_id);
             }
@@ -1734,7 +1813,6 @@ class PolylangMassTranslation
     {
         return function_exists('wc_get_product');
     }
-
     private function translate_with_deepl($text, $source_lang, $target_lang)
     {
         $provider = $this->get_active_provider();
@@ -1880,6 +1958,7 @@ class PolylangMassTranslation
 
     public function transliterate_to_slug($text, $language = '')
     {
+        // Приводим к нижнему регистру
         if (function_exists('mb_strtolower')) {
             $text = mb_strtolower($text, 'UTF-8');
         } else {
@@ -2255,53 +2334,24 @@ class PolylangMassTranslation
             }
         }
     }
-}
 
-// AJAX обработчик теста подключения к DeepL
-add_action('wp_ajax_test_deepl_connection', function () {
-    if (!wp_verify_nonce($_POST['nonce'], 'test_deepl_nonce')) {
-        wp_send_json_error('Неверный nonce');
+    public function maybe_generate_js_file()
+    {
+        $js_path = plugin_dir_path(__FILE__) . 'polylang-mass-translation.js';
+
+        if (file_exists($js_path)) {
+            return;
+        }
+
+        $written = @file_put_contents($js_path, $this->get_bulk_js_content());
+        if (false === $written && $this->logging_enabled) {
+            $this->toLog('Не удалось записать polylang-mass-translation.js. Проверьте права на запись.');
+        }
     }
 
-    if (!current_user_can('manage_options')) {
-        wp_send_json_error('Недостаточно прав');
-    }
-
-    $options = get_option('pmt_settings');
-    $api_key = $options['deepl_api_key'] ?? '';
-    $api_url = str_replace('/translate', '/usage', $options['deepl_api_url'] ?? 'https://api-free.deepl.com/v2/translate');
-
-    if (empty($api_key)) {
-        wp_send_json_error('API ключ не указан');
-    }
-
-    $response = wp_remote_get($api_url, array(
-        'headers' => array(
-            'Authorization' => 'DeepL-Auth-Key ' . $api_key,
-        ),
-        'timeout' => 10
-    ));
-
-    if (is_wp_error($response)) {
-        wp_send_json_error('Ошибка соединения: ' . $response->get_error_message());
-    }
-
-    $body = wp_remote_retrieve_body($response);
-    $data = json_decode($body, true);
-
-    if (isset($data['character_limit'])) {
-        wp_send_json_success($data);
-    } else {
-        wp_send_json_error('Неверный API ключ или ошибка API');
-    }
-});
-
-// Инициализация плагина
-new PolylangMassTranslation();
-
-// Создание JS файла при отсутствии
-if (!file_exists(plugin_dir_path(__FILE__) . 'polylang-mass-translation.js')) {
-    $js_content = "
+    private function get_bulk_js_content()
+    {
+        return <<<'JS'
 jQuery(document).ready(function($) {
     // Обработчик клика по кнопке массового перевода (копирование)
     $(document).on('click', '#bulk-translate-button', function(e) {
@@ -2316,7 +2366,7 @@ jQuery(document).ready(function($) {
     });
 
     function handleBulkTranslate(useDeepL) {
-        var checkedPosts = $('input[name=\"post[]\"]').filter(':checked');
+        var checkedPosts = $('input[name="post[]"]').filter(':checked');
 
         if (checkedPosts.length === 0) {
             alert('Пожалуйста, выберите посты для перевода');
@@ -2359,7 +2409,8 @@ jQuery(document).ready(function($) {
         });
     }
 
-    $('.tablenav select[name=\"action\"], .tablenav select[name=\"action2\"]').change(function() {
+    // Обработчик для dropdown bulk actions
+    $('.tablenav select[name="action"], .tablenav select[name="action2"]').change(function() {
         var selectedAction = $(this).val();
         if (selectedAction === 'bulk_translate' || selectedAction === 'bulk_translate_deepl') {
             $(this).closest('.tablenav').find('#doaction, #doaction2').click(function(e) {
@@ -2373,8 +2424,48 @@ jQuery(document).ready(function($) {
         }
     });
 });
-";
-
-    file_put_contents(plugin_dir_path(__FILE__) . 'polylang-mass-translation.js', $js_content);
+JS;
+    }
 }
-```
+
+// Добавляем AJAX обработчик для теста подключения
+add_action('wp_ajax_test_deepl_connection', function () {
+    if (!wp_verify_nonce($_POST['nonce'], 'test_deepl_nonce')) {
+        wp_send_json_error('Неверный nonce');
+    }
+
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Недостаточно прав');
+    }
+
+    $options = get_option('pmt_settings');
+    $api_key = $options['deepl_api_key'] ?? '';
+    $api_url = str_replace('/translate', '/usage', $options['deepl_api_url'] ?? 'https://api-free.deepl.com/v2/translate');
+
+    if (empty($api_key)) {
+        wp_send_json_error('API ключ не указан');
+    }
+
+    $response = wp_remote_get($api_url, array(
+        'headers' => array(
+            'Authorization' => 'DeepL-Auth-Key ' . $api_key,
+        ),
+        'timeout' => 10
+    ));
+
+    if (is_wp_error($response)) {
+        wp_send_json_error('Ошибка соединения: ' . $response->get_error_message());
+    }
+
+    $body = wp_remote_retrieve_body($response);
+    $data = json_decode($body, true);
+
+    if (isset($data['character_limit'])) {
+        wp_send_json_success($data);
+    } else {
+        wp_send_json_error('Неверный API ключ или ошибка API');
+    }
+});
+
+// Инициализируем плагин
+new PolylangMassTranslation();
