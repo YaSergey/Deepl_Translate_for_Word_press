@@ -1,6 +1,6 @@
 <?php
 
-//chatGPT versin 1.1
+//chatGPT version 1.1
 
 if (!defined('ABSPATH')) {
     exit;

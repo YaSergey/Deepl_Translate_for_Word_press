@@ -1,5 +1,3 @@
-
-
 <?php
 
 //chatGpt version 1.1
@@ -90,9 +88,9 @@ class PMT_Google_Translation_Provider implements PMT_Translation_Provider_Interf
         }
 
         $body = array(
-            'contents'            => array_values($items),
-            'targetLanguageCode'  => $this->normalize_language($target_language),
-            'mimeType'            => 'text/html',
+            'contents'           => array_values($items),
+            'targetLanguageCode' => $this->normalize_language($target_language),
+            'mimeType'           => 'text/html',
         );
 
         if (!empty($source_language)) {
