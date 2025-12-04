@@ -2,8 +2,8 @@
 /**
  * Plugin Name: Polylang Mass Translation with DeepL
  * Description: Добавляет кнопку для массового создания переводов постов через Polylang с автоматическим переводом через DeepL API
- * Version: 2.1
- * Author: Hontar DE
+ * Version: 5.1
+ * Author: Sergey Yasnetsky
  */
 
 // Предотвращаем прямой доступ
@@ -77,6 +77,11 @@ class PolylangMassTranslation
         }
         $log_entry = '[' . gmdate('Y-m-d H:i:s') . '] ' . (is_string($text) ? $text : wp_json_encode($text, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . PHP_EOL;
         file_put_contents(plugin_dir_path(__FILE__) . 'log.txt', $log_entry, FILE_APPEND);
+    }
+
+    private function is_allowed_post_type($post_type)
+    {
+        return in_array($post_type, array('post', 'page'), true);
     }
 
     public function bootstrap_services()
@@ -320,7 +325,7 @@ class PolylangMassTranslation
     {
         $options = get_option($this->option_name);
         $rules = $options['translation_rules'] ?? array();
-        echo '<p><label>Типы записей: <input type="text" name="' . $this->option_name . '[include_post_types]" value="' . esc_attr(implode(',', $rules['include_post_types'] ?? array('page'))) . '" /></label></p>';
+        echo '<p><label>Типы записей: <input type="text" name="' . $this->option_name . '[include_post_types]" value="' . esc_attr(implode(',', $rules['include_post_types'] ?? array('post', 'page'))) . '" /></label></p>';
         echo '<p><label>Исключить страницы (ID через запятую): <input type="text" name="' . $this->option_name . '[exclude_post_ids]" value="' . esc_attr(implode(',', $rules['exclude_post_ids'] ?? array())) . '" /></label></p>';
         echo '<p><label>Исключить шаблоны (ID): <input type="text" name="' . $this->option_name . '[exclude_template_ids]" value="' . esc_attr(implode(',', $rules['exclude_template_ids'] ?? array())) . '" /></label></p>';
         echo '<p><label>Пропустить ключи ACF: <input type="text" name="' . $this->option_name . '[exclude_acf_keys]" value="' . esc_attr(implode(',', $rules['exclude_acf_keys'] ?? array())) . '" /></label></p>';
@@ -377,8 +382,28 @@ class PolylangMassTranslation
         $sanitized['google_api_key'] = sanitize_text_field($input['google_api_key'] ?? '');
         $sanitized['google_service_account'] = wp_kses_post($input['google_service_account'] ?? '');
 
+        $allowed_post_types = array('post', 'page');
+        $input_post_types = array_filter(array_map('sanitize_text_field', explode(',', $input['include_post_types'] ?? '')));
+        $input_post_types = array_values(array_intersect($allowed_post_types, $input_post_types));
+
+        $checkbox_post_types = array();
+        if (!empty($sanitized['translate_posts'])) {
+            $checkbox_post_types[] = 'post';
+        }
+        if (!empty($sanitized['translate_pages'])) {
+            $checkbox_post_types[] = 'page';
+        }
+
+        if (!empty($checkbox_post_types)) {
+            $input_post_types = array_values(array_unique(array_intersect($allowed_post_types, $checkbox_post_types)));
+        }
+
+        if (empty($input_post_types)) {
+            $input_post_types = $allowed_post_types;
+        }
+
         $rules = array(
-            'include_post_types' => array_filter(array_map('sanitize_text_field', explode(',', $input['include_post_types'] ?? 'page'))),
+            'include_post_types' => $input_post_types,
             'exclude_post_ids' => array_filter(array_map('intval', explode(',', $input['exclude_post_ids'] ?? ''))),
             'exclude_template_ids' => array_filter(array_map('intval', explode(',', $input['exclude_template_ids'] ?? ''))),
             'exclude_acf_keys' => array_filter(array_map('sanitize_text_field', explode(',', $input['exclude_acf_keys'] ?? ''))),
@@ -424,6 +449,8 @@ class PolylangMassTranslation
             'translate_content' => true,
             'translate_title' => true,
             'translate_excerpt' => true,
+            'translate_posts' => 1,
+            'translate_pages' => 1,
             'post_status' => 'draft',
             'target_language' => '',
             'translate_whole_site' => 0,
@@ -433,7 +460,7 @@ class PolylangMassTranslation
             'glossary_id' => '',
             'glossary_terms' => '',
             'translation_rules' => array(
-                'include_post_types' => array('page'),
+                'include_post_types' => array('post', 'page'),
                 'exclude_post_ids' => array(),
                 'exclude_template_ids' => array(),
                 'exclude_acf_keys' => array(),
@@ -1102,6 +1129,10 @@ class PolylangMassTranslation
 
         if (!$original_post) {
             return array('post_id' => $post_id, 'status' => 'error', 'message' => 'Пост не найден');
+        }
+
+        if (!$this->is_allowed_post_type($original_post->post_type)) {
+            return array('post_id' => $post_id, 'status' => 'skipped', 'message' => 'Тип записи не поддерживается');
         }
 
         // Получаем язык исходного поста
