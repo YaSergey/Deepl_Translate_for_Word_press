@@ -35,11 +35,20 @@ class PMT_DeepL_Translation_Provider implements PMT_Translation_Provider_Interfa
             return new WP_Error('pmt_missing_data', __('Не хватает данных для запроса DeepL.', 'polylang-mass-translation-deepl'));
         }
 
-        return $this->translate_text(array_values($items), $target_language, $source_language, $options);
+        $items = $this->normalize_text_items($items);
+        if (empty($items)) {
+            return new WP_Error('pmt_missing_data', __('Не хватает данных для запроса DeepL.', 'polylang-mass-translation-deepl'));
+        }
+
+        return $this->translate_text($items, $target_language, $source_language, $options);
     }
 
     public function translate_text($text, $target_language, $source_language = null, $extra_args = array())
     {
+        if (is_array($text)) {
+            $text = $this->normalize_text_items($text);
+        }
+
         if ((is_array($text) && empty($text)) || empty($text) || empty($target_language) || empty($this->api_key)) {
             return new WP_Error('pmt_missing_data', __('Не хватает данных для запроса DeepL.', 'polylang-mass-translation-deepl'));
         }
@@ -117,6 +126,22 @@ class PMT_DeepL_Translation_Provider implements PMT_Translation_Provider_Interfa
         }
 
         return $length_fn((string) $text);
+    }
+
+    private function normalize_text_items(array $items)
+    {
+        $normalized = array();
+
+        foreach ($items as $item) {
+            $string_item = (string) $item;
+            if ($string_item === '') {
+                continue;
+            }
+
+            $normalized[] = $string_item;
+        }
+
+        return $normalized;
     }
 
     private function log_error($message)

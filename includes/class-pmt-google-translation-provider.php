@@ -35,6 +35,12 @@ class PMT_Google_Translation_Provider implements PMT_Translation_Provider_Interf
     public function translate_text($text, $target_language, $source_language = null, $options = array())
     {
         $items = is_array($text) ? $text : array($text);
+        $items = $this->normalize_text_items($items);
+
+        if (empty($items)) {
+            return new WP_Error('pmt_google_missing_data', __('Не хватает данных для запроса Google Translation.', 'polylang-mass-translation-deepl'));
+        }
+
         $result = $this->translate_batch($items, $target_language, $source_language, $options);
 
         if (is_wp_error($result)) {
@@ -50,6 +56,8 @@ class PMT_Google_Translation_Provider implements PMT_Translation_Provider_Interf
 
     public function translate_batch(array $items, $target_language, $source_language = null, $options = array())
     {
+        $items = $this->normalize_text_items($items);
+
         if (empty($items) || empty($target_language) || (!$this->api_key && !$this->service_account)) {
             return new WP_Error('pmt_google_missing_data', __('Не хватает данных для запроса Google Translation.', 'polylang-mass-translation-deepl'));
         }
@@ -143,6 +151,22 @@ class PMT_Google_Translation_Provider implements PMT_Translation_Provider_Interf
         }
 
         return $length_fn((string) $text);
+    }
+
+    private function normalize_text_items(array $items)
+    {
+        $normalized = array();
+
+        foreach ($items as $item) {
+            $string_item = (string) $item;
+            if ($string_item === '') {
+                continue;
+            }
+
+            $normalized[] = $string_item;
+        }
+
+        return $normalized;
     }
 
     private function normalize_language($language)
