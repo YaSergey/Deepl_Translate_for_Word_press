@@ -28,7 +28,9 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-pmt-preview-store.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-pmt-job-manager.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-pmt-rule-engine.php';
 
-// Main plugin orchestrator for Polylang mass translation.
+/**
+ * Main plugin orchestrator for Polylang mass translation.
+ */
 class PolylangMassTranslation
 {
 
