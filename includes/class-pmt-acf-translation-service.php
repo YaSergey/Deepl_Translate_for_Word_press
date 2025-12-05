@@ -3,6 +3,9 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+/**
+ * Translates ACF text-based fields while respecting synchronized keys configured by Polylang.
+ */
 class PMT_ACF_Translation_Service
 {
     private $batcher;
